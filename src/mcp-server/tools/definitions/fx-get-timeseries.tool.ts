@@ -212,6 +212,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     const spillResult = await spillover({
       canvas: instance,
       source: rows,
+      tableName,
       previewChars: 40_000, // ~10k tokens preview
       signal: ctx.signal,
     });

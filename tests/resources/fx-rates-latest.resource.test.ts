@@ -47,6 +47,17 @@ describe('fxRatesLatestResource', () => {
     expect(mockGetRates).toHaveBeenCalledWith('EUR', 'latest');
   });
 
+  it('throws an actionable error for unsupported base currency', async () => {
+    mockGetRates.mockRejectedValue(new Error('not found: {"message":"not found"}'));
+    const ctx = createMockContext();
+    const params = fxRatesLatestResource.params.parse({ base: 'XYZ' });
+
+    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toThrow(
+      /not supported by the ECB/,
+    );
+    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toThrow(/fx_list_currencies/);
+  });
+
   it('lists available resources with example URIs', () => {
     const listing = fxRatesLatestResource.list!();
     expect(listing.resources).toBeInstanceOf(Array);

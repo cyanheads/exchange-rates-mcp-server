@@ -192,6 +192,10 @@ describe('fx_get_timeseries', () => {
     expect(result.rate_count).toBe(130);
     expect(mockCanvasAcquire).toHaveBeenCalled();
     expect(canvasCore.spillover).toHaveBeenCalledOnce();
+    // Verify that the stable table name is passed to spillover (not left to auto-generate)
+    expect(vi.mocked(canvasCore.spillover)).toHaveBeenCalledWith(
+      expect.objectContaining({ tableName: 'fx_usd_eur' }),
+    );
   });
 
   it('format renders canvas info when spilled=true', () => {

@@ -33,7 +33,18 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
 
   async handler(params, ctx) {
     const service = getFrankfurterService();
-    const raw = await service.getRates(params.base, 'latest');
+    let raw: Awaited<ReturnType<typeof service.getRates>>;
+    try {
+      raw = await service.getRates(params.base, 'latest');
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      if (msg.includes('not found')) {
+        throw new Error(
+          `Currency "${params.base}" is not supported by the ECB. Call fx_list_currencies to get valid codes.`,
+        );
+      }
+      throw err;
+    }
     ctx.log.info('Fetched latest rates resource', {
       base: params.base,
       date: raw.date,
