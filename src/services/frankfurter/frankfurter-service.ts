@@ -18,6 +18,25 @@ import type {
 /** ECB data start date. Requests before this return 404 from Frankfurter. */
 const ECB_START_DATE = '1999-01-04';
 
+/** YYYY-MM-DD format guard. */
+const DATE_FORMAT_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** ISO 4217 currency code guard: 1-4 uppercase letters (covers standard 3-letter codes + rare 4-letter ones). */
+const CURRENCY_CODE_RE = /^[A-Za-z]{1,4}$/;
+
+/** Validate a date string is YYYY-MM-DD. Throws on bad format. */
+function assertDateFormat(date: string, label: string): void {
+  if (!DATE_FORMAT_RE.test(date)) {
+    throw new Error(`not found: ${label} "${date}" is not a valid YYYY-MM-DD date`);
+  }
+}
+
+/** Validate a currency code is safe to embed in a URL. Throws on bad format. */
+function assertCurrencyFormat(code: string, label: string): void {
+  if (!CURRENCY_CODE_RE.test(code)) {
+    throw new Error(`not found: ${label} "${code}" is not a valid ISO 4217 currency code`);
+  }
+}
+
 let _service: FrankfurterService | undefined;
 
 /** Retrieve the singleton FrankfurterService (lazy-init). */
@@ -65,6 +84,9 @@ class FrankfurterService {
   async getRate(base: string, quote: string, date: string): Promise<ResolvedRate> {
     const upper_base = base.toUpperCase();
     const upper_quote = quote.toUpperCase();
+    assertCurrencyFormat(upper_base, 'base_currency');
+    assertCurrencyFormat(upper_quote, 'quote_currency');
+    if (date !== 'latest') assertDateFormat(date, 'date');
 
     if (upper_base === upper_quote) {
       // Identity rate — no API call needed
@@ -82,8 +104,9 @@ class FrankfurterService {
 
     // Frankfurter supports arbitrary base — it triangulates through EUR internally.
     // Single call: base={upper_base}&symbols={upper_quote}
-    const endpoint = date === 'latest' ? '/latest' : `/${date}`;
-    const url = `${endpoint}?base=${upper_base}&symbols=${upper_quote}`;
+    const endpoint = date === 'latest' ? '/latest' : `/${encodeURIComponent(date)}`;
+    const params = new URLSearchParams({ base: upper_base, symbols: upper_quote });
+    const url = `${endpoint}?${params}`;
 
     const raw = await this.fetchJson<FrankfurterRateResponse>(url);
     const rate = raw.rates[upper_quote];
@@ -111,9 +134,17 @@ class FrankfurterService {
    * Optionally filter to a specific set of symbols.
    */
   getRates(base: string, date: string, symbols?: string[]): Promise<FrankfurterRateResponse> {
-    const endpoint = date === 'latest' ? '/latest' : `/${date}`;
-    const symbolsParam = symbols && symbols.length > 0 ? `&symbols=${symbols.join(',')}` : '';
-    const url = `${endpoint}?base=${base.toUpperCase()}${symbolsParam}`;
+    const upper_base = base.toUpperCase();
+    assertCurrencyFormat(upper_base, 'base_currency');
+    if (date !== 'latest') assertDateFormat(date, 'date');
+    if (symbols) {
+      for (const sym of symbols) assertCurrencyFormat(sym.toUpperCase(), 'symbol');
+    }
+    const endpoint = date === 'latest' ? '/latest' : `/${encodeURIComponent(date)}`;
+    const params = new URLSearchParams({ base: upper_base });
+    if (symbols && symbols.length > 0)
+      params.set('symbols', symbols.map((s) => s.toUpperCase()).join(','));
+    const url = `${endpoint}?${params}`;
     return this.fetchJson<FrankfurterRateResponse>(url);
   }
 
@@ -131,8 +162,13 @@ class FrankfurterService {
   ): Promise<{ raw: FrankfurterSeriesResponse; rows: SeriesRow[] }> {
     const upper_base = base.toUpperCase();
     const upper_quote = quote.toUpperCase();
+    assertCurrencyFormat(upper_base, 'base_currency');
+    assertCurrencyFormat(upper_quote, 'quote_currency');
+    assertDateFormat(startDate, 'start_date');
+    assertDateFormat(endDate, 'end_date');
 
-    const url = `/${startDate}..${endDate}?base=${upper_base}&symbols=${upper_quote}`;
+    const params = new URLSearchParams({ base: upper_base, symbols: upper_quote });
+    const url = `/${encodeURIComponent(startDate)}..${encodeURIComponent(endDate)}?${params}`;
     const raw = await this.fetchJson<FrankfurterSeriesResponse>(url);
 
     const rows: SeriesRow[] = Object.entries(raw.rates)
