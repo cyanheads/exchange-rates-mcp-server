@@ -1,7 +1,7 @@
 {
   "exchange-rates-mcp-server": {
     "command": "npx",
-    "args": ["-y", "exchange-rates-mcp-server"],
+    "args": ["-y", "@cyanheads/exchange-rates-mcp-server"],
     "env": {
       "MCP_TRANSPORT_TYPE": "stdio"
     }

@@ -43,7 +43,7 @@ ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="exchange-rates-mcp-server"
-LABEL org.opencontainers.image.description="ECB reference FX rates and currency conversion via Frankfurter."
+LABEL org.opencontainers.image.description="Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP."
 LABEL org.opencontainers.image.source="https://github.com/cyanheads/exchange-rates-mcp-server"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 

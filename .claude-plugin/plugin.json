@@ -1,17 +1,17 @@
 {
-  "name": "exchange-rates-mcp-server",
+  "name": "@cyanheads/exchange-rates-mcp-server",
   "version": "0.1.0",
-  "description": "",
+  "description": "Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": ""
+    "name": "cyanheads"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/exchange-rates-mcp-server#readme",
+  "repository": "git+https://github.com/cyanheads/exchange-rates-mcp-server.git",
   "license": "Apache-2.0",
   "mcpServers": {
     "exchange-rates-mcp-server": {
       "command": "npx",
-      "args": ["-y", "exchange-rates-mcp-server"],
+      "args": ["-y", "@cyanheads/exchange-rates-mcp-server"],
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio"
       }

@@ -11,19 +11,6 @@
 
 ---
 
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. You're holding a production-grade MCP framework with the hard parts already solved — error handling, telemetry, auth, transport, validation, lifecycle. What's missing is the **domain**. Your job: design the tool, resource, and service surface with the user, then implement it as small pure handlers that throw — the framework catches, classifies, and instruments the rest. Design before code; the user's first messages set direction, so wait for them before scaffolding definitions.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
-
----
-
 ## What's Next?
 
 When the user asks what's next or needs direction, suggest options based on the current project state. Common next steps:
@@ -60,35 +47,46 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { getFrankfurterService } from '@/services/frankfurter/frankfurter-service.js';
 
-export const searchItems = tool('search_items', {
-  description: 'Search inventory items by query.',
-  annotations: { readOnlyHint: true },
+export const fxGetRate = tool('fx_get_rate', {
+  description:
+    'Get the exchange rate for a currency pair on a given date (default: latest). ' +
+    'Returns the rate, the actual rate date, and source provenance. ' +
+    'Cross-rates are triangulated through EUR automatically.',
+  annotations: { readOnlyHint: true, idempotentHint: true },
   input: z.object({
-    query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
+    base_currency: z.string().describe('ISO 4217 base currency code (e.g. USD).'),
+    quote_currency: z.string().describe('ISO 4217 quote currency code (e.g. EUR).'),
+    date: z.string().optional().describe('ISO 8601 date (YYYY-MM-DD). Omit for latest.'),
   }),
   output: z.object({
-    items: z.array(z.object({
-      id: z.string().describe('Item ID'),
-      name: z.string().describe('Item name'),
-    })).describe('Matching items'),
+    rate: z.number().describe('Exchange rate: units of quote per 1 unit of base.'),
+    rate_date: z.string().describe('Actual date of the rate returned.'),
+    date_snapped: z.boolean().describe('True when the API snapped a weekend/holiday to the prior business day.'),
+    rate_type: z.string().describe('Always "ECB reference (mid-market)".'),
+    source: z.string().describe('Always "ECB via Frankfurter".'),
   }),
-  auth: ['inventory:read'],
-
+  errors: [
+    { reason: 'unsupported_currency', code: JsonRpcErrorCode.InvalidParams,
+      when: 'base_currency or quote_currency is not in the ECB currency set',
+      recovery: 'Call fx_list_currencies to get valid ISO 4217 codes.' },
+    { reason: 'date_out_of_range', code: JsonRpcErrorCode.InvalidParams,
+      when: 'date is before 1999-01-04 or in the future',
+      recovery: 'ECB data starts 1999-01-04; omit date for latest.' },
+  ],
   async handler(input, ctx) {
-    const items = await findItems(input.query, input.limit);
-    ctx.log.info('Search completed', { query: input.query, count: items.length });
-    return { items };
+    const service = getFrankfurterService();
+    const result = await service.getRate(input.base_currency, input.quote_currency, input.date);
+    ctx.log.info('Rate fetched', { base: input.base_currency, quote: input.quote_currency });
+    return result;
   },
-
-  // format() populates content[] — the markdown twin of structuredContent.
-  // Different clients read different surfaces (Claude Code → structuredContent,
-  // Claude Desktop → content[]); both must carry the same data.
-  // Enforced at lint time: every field in `output` must appear in the rendered text.
-  format: (result) => [{
+  format: (r) => [{
     type: 'text',
-    text: result.items.map(i => `**${i.id}**: ${i.name}`).join('\n'),
+    text: `${r.rate_date}: 1 ${r.base_currency ?? '?'} = ${r.rate} ${r.quote_currency ?? '?'}` +
+          (r.date_snapped ? ' (snapped to prior business day)' : '') +
+          `\nRate type: ${r.rate_type} | Source: ${r.source}`,
   }],
 });
 ```
@@ -97,54 +95,48 @@ export const searchItems = tool('search_items', {
 
 ```ts
 import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import { getFrankfurterService } from '@/services/frankfurter/frankfurter-service.js';
 
-export const itemData = resource('inventory://{itemId}', {
-  description: 'Fetch an inventory item by ID.',
-  params: z.object({ itemId: z.string().describe('Item identifier') }),
-  auth: ['inventory:read'],
-  async handler(params, ctx) {
-    const item = await ctx.state.get(`item:${params.itemId}`);
-    if (!item) throw notFound(`Item ${params.itemId} not found`, { itemId: params.itemId });
-    return item;
-  },
-});
-```
-
-### Prompt
-
-```ts
-import { prompt, z } from '@cyanheads/mcp-ts-core';
-
-export const reviewCode = prompt('review_code', {
-  description: 'Review code for issues and best practices.',
-  args: z.object({
-    code: z.string().describe('Code to review'),
-    language: z.string().optional().describe('Programming language'),
+export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
+  name: 'fx-rates-latest',
+  description: 'Latest exchange rates snapshot for a base currency as a stable URI.',
+  mimeType: 'application/json',
+  params: z.object({
+    base: z.string().describe('ISO 4217 base currency code (e.g. USD, EUR, GBP).'),
   }),
-  generate: (args) => [
-    { role: 'user', content: { type: 'text', text: `Review this ${args.language ?? ''} code:\n${args.code}` } },
-  ],
+  output: z.object({
+    base_currency: z.string().describe('The base currency code.'),
+    rate_date: z.string().describe('Actual date of the rates.'),
+    rates: z.record(z.string(), z.number()).describe('Map of quote currency → rate.'),
+    rate_type: z.string().describe('Always "ECB reference (mid-market)".'),
+    source: z.string().describe('Always "ECB via Frankfurter".'),
+  }),
+  async handler(params, ctx) {
+    const service = getFrankfurterService();
+    return await service.getRates(params.base, 'latest');
+  },
 });
 ```
 
 ### Server config
 
 ```ts
-// src/config/server-config.ts — lazy-parsed, separate from framework config
+// src/config/server-config.ts
 import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
-  apiKey: z.string().describe('External API key'),
-  maxResults: z.coerce.number().default(100),
+  frankfurterBaseUrl: z.string().url().default('https://api.frankfurter.dev/v1')
+    .describe('Frankfurter API base URL.'),
+  timeseriesCanvasThresholdDays: z.coerce.number().default(90)
+    .describe('Day count above which fx_get_timeseries spills to DataCanvas.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
 export function getServerConfig() {
   _config ??= parseEnvConfig(ServerConfigSchema, {
-    apiKey: 'MY_API_KEY',
-    maxResults: 'MY_MAX_RESULTS',
+    frankfurterBaseUrl: 'FRANKFURTER_BASE_URL',
+    timeseriesCanvasThresholdDays: 'FX_TIMESERIES_CANVAS_THRESHOLD_DAYS',
   });
   return _config;
 }
@@ -223,20 +215,27 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point
+  index.ts                              # createApp() entry point — registers all tools, resources, services
   config/
-    server-config.ts                    # Server-specific env vars (Zod schema)
+    server-config.ts                    # FRANKFURTER_BASE_URL, FX_TIMESERIES_CANVAS_THRESHOLD_DAYS
   services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+    canvas/
+      canvas-accessor.ts               # Module-level DataCanvas accessor (set via createApp setup())
+    frankfurter/
+      frankfurter-service.ts           # Frankfurter HTTP client — getRate, getRates, getTimeseries, getCurrencies
+      types.ts                         # Domain types (ResolvedRate, RatesSnapshot, TimeseriesResult, …)
   mcp-server/
     tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
+      fx-convert-currency.tool.ts      # Convert amount between two currencies
+      fx-get-rate.tool.ts              # Exchange rate for a currency pair
+      fx-get-rates.tool.ts             # All rates for a base currency snapshot
+      fx-get-timeseries.tool.ts        # Historical daily rates; spills to DataCanvas for long ranges
+      fx-list-currencies.tool.ts       # All supported ISO 4217 currencies
+      fx-dataframe-describe.tool.ts    # List DataCanvas tables from a prior timeseries call
+      fx-dataframe-query.tool.ts       # SQL SELECT against DataCanvas tables
     resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
-    prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      fx-currencies.resource.ts        # fx://currencies — stable currencies reference document
+      fx-rates-latest.resource.ts      # fx://rates/latest/{base} — latest rates snapshot
 ```
 
 ---
@@ -320,6 +319,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `npm run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md` |
 | `npm run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
 | `npm run bundle` | Build and pack as `.mcpb` for one-click Claude Desktop install |
+| `npm run publish-mcp` | Publish to MCP Registry via mcp-publisher |
 
 ---
 

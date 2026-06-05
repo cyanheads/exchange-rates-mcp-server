@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "cyanheads/exchange-rates-mcp-server",
-  "description": "ECB reference FX rates and currency conversion via Frankfurter. DataCanvas analytics for time-series data.",
+  "name": "io.github.cyanheads/exchange-rates-mcp-server",
+  "description": "Convert currencies, get FX rates, and query historical ECB exchange rate data.",
   "repository": {
     "url": "https://github.com/cyanheads/exchange-rates-mcp-server",
     "source": "github"
@@ -11,8 +11,8 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "exchange-rates-mcp-server",
-      "runtimeHint": "node",
+      "identifier": "@cyanheads/exchange-rates-mcp-server",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -25,6 +25,20 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "FRANKFURTER_BASE_URL",
+          "description": "Frankfurter API base URL. Override for local testing or self-hosted instances.",
+          "format": "string",
+          "isRequired": false,
+          "default": "https://api.frankfurter.dev/v1"
+        },
+        {
+          "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
+          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics.",
+          "format": "string",
+          "isRequired": false,
+          "default": "90"
+        },
         {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
@@ -40,8 +54,8 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "exchange-rates-mcp-server",
-      "runtimeHint": "node",
+      "identifier": "@cyanheads/exchange-rates-mcp-server",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -54,6 +68,20 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "FRANKFURTER_BASE_URL",
+          "description": "Frankfurter API base URL. Override for local testing or self-hosted instances.",
+          "format": "string",
+          "isRequired": false,
+          "default": "https://api.frankfurter.dev/v1"
+        },
+        {
+          "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
+          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics.",
+          "format": "string",
+          "isRequired": false,
+          "default": "90"
+        },
         {
           "name": "MCP_HTTP_HOST",
           "description": "The hostname for the HTTP server.",
