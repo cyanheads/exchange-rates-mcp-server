@@ -5,7 +5,7 @@
   "description": "Convert currencies, get FX rates, and query historical ECB exchange rate data.",
   "author": { "name": "cyanheads" },
   "homepage": "https://github.com/cyanheads/exchange-rates-mcp-server#readme",
-  "repository": "https://github.com/cyanheads/exchange-rates-mcp-server",
+  "repository": { "type": "git", "url": "https://github.com/cyanheads/exchange-rates-mcp-server" },
   "license": "Apache-2.0",
   "server": {
     "type": "node",
