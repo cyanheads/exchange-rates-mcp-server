@@ -5,17 +5,42 @@
  */
 
 import { createApp } from '@cyanheads/mcp-ts-core';
-import { echoPrompt } from './mcp-server/prompts/definitions/echo.prompt.js';
-import { echoResource } from './mcp-server/resources/definitions/echo.resource.js';
-import { echoAppUiResource } from './mcp-server/resources/definitions/echo-app-ui.app-resource.js';
-import { echoTool } from './mcp-server/tools/definitions/echo.tool.js';
-import { echoAppTool } from './mcp-server/tools/definitions/echo-app.app-tool.js';
+import {
+  fxCurrenciesResource,
+  fxRatesLatestResource,
+} from './mcp-server/resources/definitions/index.js';
+import {
+  fxConvertCurrency,
+  fxDataframeDescribe,
+  fxDataframeQuery,
+  fxGetRate,
+  fxGetRates,
+  fxGetTimeseries,
+  fxListCurrencies,
+} from './mcp-server/tools/definitions/index.js';
+import { setCanvas } from './services/canvas/canvas-accessor.js';
 
 await createApp({
-  tools: [echoTool, echoAppTool],
-  resources: [echoResource, echoAppUiResource],
-  prompts: [echoPrompt],
-  // instructions: 'Server-level orientation forwarded to the model on every initialize.\n' +
-  //   '- Use shortcut `X` for the most common case\n' +
-  //   '- Tools require auth via the `inventory:read` scope',
+  tools: [
+    fxListCurrencies,
+    fxGetRates,
+    fxGetRate,
+    fxConvertCurrency,
+    fxGetTimeseries,
+    fxDataframeDescribe,
+    fxDataframeQuery,
+  ],
+  resources: [fxCurrenciesResource, fxRatesLatestResource],
+  prompts: [],
+
+  instructions:
+    'ECB reference FX rates via Frankfurter (keyless, ~30 currencies, 1999-01-04 to present).\n' +
+    '- Rates are mid-market ECB reference rates — not tradeable bid/ask.\n' +
+    '- Use fx_list_currencies first to disambiguate "dollars" (USD/AUD/CAD/HKD/SGD).\n' +
+    '- Cross-rates (e.g. USD→JPY) are triangulated through EUR automatically.\n' +
+    '- Long time-series (>90 days) spill to DataCanvas; use fx_dataframe_query for SQL.',
+
+  setup(core) {
+    setCanvas(core.canvas);
+  },
 });

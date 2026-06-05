@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "exchange-rates-mcp-server",
-  "description": "",
+  "name": "cyanheads/exchange-rates-mcp-server",
+  "description": "ECB reference FX rates and currency conversion via Frankfurter. DataCanvas analytics for time-series data.",
   "repository": {
-    "url": "",
+    "url": "https://github.com/cyanheads/exchange-rates-mcp-server",
     "source": "github"
   },
   "version": "0.1.0",
