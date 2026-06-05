@@ -12,6 +12,7 @@ import {
   ECB_START_DATE,
   getFrankfurterService,
 } from '@/services/frankfurter/frankfurter-service.js';
+import type { FrankfurterSeriesResponse, SeriesRow } from '@/services/frankfurter/types.js';
 
 export const fxGetTimeseries = tool('fx_get_timeseries', {
   description:
@@ -152,8 +153,8 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     const dayCount =
       (new Date(input.end_date).getTime() - new Date(input.start_date).getTime()) / msPerDay + 1;
 
-    let raw: Awaited<ReturnType<typeof service.getTimeSeries>>['raw'];
-    let rows: Awaited<ReturnType<typeof service.getTimeSeries>>['rows'];
+    let raw: FrankfurterSeriesResponse;
+    let rows: SeriesRow[];
     try {
       ({ raw, rows } = await service.getTimeSeries(
         input.base_currency,
@@ -248,17 +249,12 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     }
 
     // Fell under budget even at canvas threshold — return inline
-    const rateMap: Record<string, number> = {};
-    for (const row of spillResult.previewRows) {
-      const r = row as { date: string; rate: number };
-      rateMap[r.date] = r.rate;
-    }
     return {
       base_currency: input.base_currency.toUpperCase(),
       quote_currency: input.quote_currency.toUpperCase(),
       start_date: actualStart,
       end_date: actualEnd,
-      rates: rateMap,
+      rates: previewRates,
       rate_count: spillResult.previewRows.length,
       rate_type: 'ECB reference (mid-market)',
       source: 'ECB via Frankfurter',
