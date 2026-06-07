@@ -16,8 +16,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
     'Convert an amount between any two currencies at the latest or a historical rate. ' +
     'Returns the converted amount, the rate used, the actual rate date, and whether the ' +
     'date was snapped from a weekend/holiday to the prior business day. ' +
-    'Cross-rates are triangulated through EUR automatically. ' +
-    'The primary tool for agent-driven FX workflows.',
+    'Cross-rates are triangulated through EUR automatically.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

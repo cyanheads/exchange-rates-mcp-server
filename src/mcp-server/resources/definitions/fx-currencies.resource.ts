@@ -9,9 +9,7 @@ import { getFrankfurterService } from '@/services/frankfurter/frankfurter-servic
 export const fxCurrenciesResource = resource('fx://currencies', {
   name: 'fx-currencies',
   description:
-    'All supported ISO 4217 currency codes with full names. ' +
-    'Injectable context for clients that support resources. ' +
-    'Covers the ~30 ECB reference currencies.',
+    'All supported ISO 4217 currency codes with full names. Covers the ~30 ECB reference currencies.',
   mimeType: 'application/json',
   params: z.object({}),
   output: z.object({
