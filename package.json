@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/exchange-rates-mcp-server",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "mcpName": "io.github.cyanheads/exchange-rates-mcp-server",
   "description": "Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP.",
   "type": "module",
