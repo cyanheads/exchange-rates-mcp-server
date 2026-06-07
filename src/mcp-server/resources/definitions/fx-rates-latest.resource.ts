@@ -4,6 +4,7 @@
  */
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
+import { invalidParams } from '@cyanheads/mcp-ts-core/errors';
 import { getFrankfurterService } from '@/services/frankfurter/frankfurter-service.js';
 
 export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
@@ -39,7 +40,7 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
     } catch (err) {
       const msg = (err as Error).message ?? '';
       if (msg.includes('not found')) {
-        throw new Error(
+        throw invalidParams(
           `Currency "${params.base}" is not supported by the ECB. Call fx_list_currencies to get valid codes.`,
         );
       }

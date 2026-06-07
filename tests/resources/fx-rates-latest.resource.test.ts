@@ -3,6 +3,7 @@
  * @module tests/resources/fx-rates-latest.resource.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxRatesLatestResource } from '@/mcp-server/resources/definitions/fx-rates-latest.resource.js';
@@ -47,15 +48,18 @@ describe('fxRatesLatestResource', () => {
     expect(mockGetRates).toHaveBeenCalledWith('EUR', 'latest');
   });
 
-  it('throws an actionable error for unsupported base currency', async () => {
+  it('throws InvalidParams (-32602) for unsupported base currency', async () => {
     mockGetRates.mockRejectedValue(new Error('not found: {"message":"not found"}'));
     const ctx = createMockContext();
     const params = fxRatesLatestResource.params.parse({ base: 'XYZ' });
 
-    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toThrow(
-      /not supported by the ECB/,
-    );
-    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toThrow(/fx_list_currencies/);
+    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.InvalidParams,
+      message: expect.stringMatching(/not supported by the ECB/),
+    });
+    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
+      message: expect.stringMatching(/fx_list_currencies/),
+    });
   });
 
   it('lists available resources with example URIs', () => {
