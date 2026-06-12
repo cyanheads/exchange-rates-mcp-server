@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/exchange-rates-mcp-server",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
@@ -13,7 +13,7 @@
   "keywords": ["exchange-rates", "currency-conversion", "fx", "ecb", "frankfurter", "mcp", "mcp-server", "model-context-protocol"],
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
-    "displayName": "@cyanheads/exchange-rates-mcp-server",
+    "displayName": "exchange-rates-mcp-server",
     "shortDescription": "Convert currencies, get FX rates, and query historical ECB exchange rate data.",
     "longDescription": "ECB reference FX rates and currency conversion via Frankfurter (keyless, ~30 currencies, 1999-01-04 to present). Supports cross-rate triangulation, historical time-series retrieval, and DataCanvas SQL analytics for long ranges.",
     "developerName": "cyanheads",
