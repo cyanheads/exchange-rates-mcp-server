@@ -51,8 +51,35 @@ describe('fx_dataframe_query', () => {
 
     expect(result.canvas_id).toBe('abc1234567');
     expect(result.row_count).toBe(2);
+    expect(result.truncated).toBe(false);
     expect(result.rows).toHaveLength(2);
     expect(result.rows[0]).toMatchObject({ date: '2024-06-03', rate: 0.91 });
+  });
+
+  it('surfaces truncated when the row cap was hit', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [{ date: '2024-06-03', rate: 0.91 }],
+      rowCount: 10_000,
+      truncated: true,
+    });
+    mockAcquire.mockResolvedValue({
+      canvasId: 'abc1234567',
+      isNew: false,
+      expiresAt: '2026-06-05T00:00:00.000Z',
+      query: mockQuery,
+    });
+    mockGetCanvas.mockReturnValue({
+      acquire: mockAcquire,
+    } as unknown as ReturnType<typeof canvasModule.getCanvas>);
+
+    const ctx = createMockContext({ errors: fxDataframeQuery.errors });
+    const result = await fxDataframeQuery.handler(
+      { canvas_id: 'abc1234567', query: 'SELECT * FROM fx_usd_eur' },
+      ctx,
+    );
+
+    expect(result.truncated).toBe(true);
+    expect(result.row_count).toBe(10_000);
   });
 
   it('throws canvas_not_found for missing canvas', async () => {
@@ -113,6 +140,7 @@ describe('fx_dataframe_query', () => {
         { date: '2024-06-04', rate: 0.92 },
       ],
       row_count: 2,
+      truncated: false,
       canvas_id: 'abc1234567',
     };
     const content = fxDataframeQuery.format!(result);
@@ -124,10 +152,23 @@ describe('fx_dataframe_query', () => {
     expect(text).toContain('abc1234567');
   });
 
+  it('format discloses the row cap when truncated', () => {
+    const result = {
+      rows: Array.from({ length: 50 }, (_, i) => ({ date: `2024-06-${i + 1}`, rate: 0.9 })),
+      row_count: 10_000,
+      truncated: true,
+      canvas_id: 'abc1234567',
+    };
+    const content = fxDataframeQuery.format!(result);
+    const text = (content[0] as { text: string }).text;
+    expect(text).toContain('capped');
+  });
+
   it('format renders empty result correctly', () => {
     const result = {
       rows: [],
       row_count: 0,
+      truncated: false,
       canvas_id: 'abc1234567',
     };
     const content = fxDataframeQuery.format!(result);

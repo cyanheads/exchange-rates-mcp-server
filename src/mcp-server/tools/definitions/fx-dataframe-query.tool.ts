@@ -45,7 +45,16 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       ),
     row_count: z
       .number()
-      .describe('Total rows in the full result set before the row cap was applied.'),
+      .describe(
+        'Rows returned. Equals the materialized row count; when truncated is true this is the row cap, ' +
+          'not the full result size. Narrow the SELECT (add WHERE/LIMIT or aggregate) to see all rows.',
+      ),
+    truncated: z
+      .boolean()
+      .describe(
+        'True when the query produced more rows than the canvas row cap and the result was capped. ' +
+          'Refine the query to materialize the complete result.',
+      ),
     canvas_id: z
       .string()
       .describe(
@@ -62,7 +71,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     },
     {
       reason: 'invalid_query',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'SQL is not a SELECT, references unknown tables/columns, or has a syntax error.',
       recovery: 'Run fx_dataframe_describe first to verify table and column names.',
     },
@@ -117,18 +126,28 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     ctx.log.info('Executed dataframe query', {
       canvasId: input.canvas_id,
       rowCount: result.rowCount,
+      truncated: result.truncated ?? false,
     });
 
     return {
       rows: result.rows,
       row_count: result.rowCount,
+      truncated: result.truncated ?? false,
       canvas_id: input.canvas_id,
     };
   },
 
   format: (result) => {
+    const capNote = result.truncated
+      ? '\n⚠️ *truncated: hit the canvas row cap — refine the query (WHERE/LIMIT/aggregate) to materialize the full set.*'
+      : '\n*truncated: no*';
     if (result.rows.length === 0) {
-      return [{ type: 'text', text: `Query returned 0 rows (canvas \`${result.canvas_id}\`).` }];
+      return [
+        {
+          type: 'text',
+          text: `Query returned 0 rows (canvas \`${result.canvas_id}\`).${capNote}`,
+        },
+      ];
     }
     const cols = Object.keys(result.rows[0] ?? {});
     const header = `| ${cols.join(' | ')} |`;
@@ -136,14 +155,15 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     const rowLines = result.rows
       .slice(0, 50)
       .map((r) => `| ${cols.map((c) => String(r[c] ?? '')).join(' | ')} |`);
+    const shown = Math.min(result.rows.length, 50);
+    const total = result.truncated ? `${result.row_count}+ (capped)` : `${result.row_count}`;
     const note =
-      result.row_count > 50
-        ? `\n*Showing 50 of ${result.row_count} rows*`
-        : `\n*${result.row_count} rows*`;
+      result.row_count > shown ? `\n*Showing ${shown} of ${total} rows*` : `\n*${total} rows*`;
+    const table = [header, sep, ...rowLines].join('\n');
     return [
       {
         type: 'text',
-        text: [header, sep, ...rowLines].join('\n') + note + ` · canvas \`${result.canvas_id}\``,
+        text: `${table}${note} · canvas \`${result.canvas_id}\`${capNote}`,
       },
     ];
   },
