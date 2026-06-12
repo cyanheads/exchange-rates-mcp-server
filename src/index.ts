@@ -21,6 +21,8 @@ import {
 import { setCanvas } from './services/canvas/canvas-accessor.js';
 
 await createApp({
+  name: 'exchange-rates-mcp-server',
+  title: 'exchange-rates-mcp-server',
   tools: [
     fxListCurrencies,
     fxGetRates,
