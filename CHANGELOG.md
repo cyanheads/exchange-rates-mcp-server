@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-12
+
+Adopt @cyanheads/mcp-ts-core ^0.10.6; input-validation errors now classify as ValidationError (-32007); fx_dataframe_query gains a truncated output field; MCPB bundle now strips dependency-shipped agent docs
+
 ## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-06
 
 Unsupported currency returns InvalidParams (-32602) in fx://rates/latest/{base}; cleaned audience-aware phrasing from fx_convert_currency and fx://currencies
