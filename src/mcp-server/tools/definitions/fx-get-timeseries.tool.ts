@@ -100,19 +100,19 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
   errors: [
     {
       reason: 'unsupported_currency',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'base_currency or quote_currency is not in the ECB currency set.',
       recovery: 'Call fx_list_currencies to get the list of valid currency codes.',
     },
     {
       reason: 'date_out_of_range',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'start_date is before 1999-01-04 or end_date is in the future.',
       recovery: "ECB data starts 1999-01-04; omit end_date or use today's date.",
     },
     {
       reason: 'invalid_range',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'start_date is after end_date.',
       recovery: 'Ensure start_date is before or equal to end_date.',
     },

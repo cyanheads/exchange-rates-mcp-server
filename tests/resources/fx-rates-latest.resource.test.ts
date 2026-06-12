@@ -48,13 +48,13 @@ describe('fxRatesLatestResource', () => {
     expect(mockGetRates).toHaveBeenCalledWith('EUR', 'latest');
   });
 
-  it('throws InvalidParams (-32602) for unsupported base currency', async () => {
+  it('throws ValidationError (-32007) for unsupported base currency', async () => {
     mockGetRates.mockRejectedValue(new Error('not found: {"message":"not found"}'));
     const ctx = createMockContext();
     const params = fxRatesLatestResource.params.parse({ base: 'XYZ' });
 
     await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       message: expect.stringMatching(/not supported by the ECB/),
     });
     await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({

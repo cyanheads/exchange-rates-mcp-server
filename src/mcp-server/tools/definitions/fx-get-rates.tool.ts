@@ -65,13 +65,13 @@ export const fxGetRates = tool('fx_get_rates', {
   errors: [
     {
       reason: 'unsupported_currency',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'base_currency is not in the ECB currency set.',
       recovery: 'Call fx_list_currencies to get the list of valid currency codes.',
     },
     {
       reason: 'date_out_of_range',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'date is before 1999-01-04 or in the future.',
       recovery: 'ECB data starts 1999-01-04; omit date for the latest available rate.',
     },
