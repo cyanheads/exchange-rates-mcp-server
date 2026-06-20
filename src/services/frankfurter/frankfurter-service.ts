@@ -194,7 +194,7 @@ class FrankfurterService {
           response = await fetch(url, {
             headers: {
               Accept: 'application/json',
-              'User-Agent': 'exchange-rates-mcp-server/0.1.1',
+              'User-Agent': 'exchange-rates-mcp-server/0.1.5',
             },
             signal: AbortSignal.timeout(10_000),
           });
