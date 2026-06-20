@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-06-12 07:33:48
+Generated on: 2026-06-20 11:32:12
 
 ```text
 exchange-rates-mcp-server/
@@ -28,6 +28,7 @@ exchange-rates-mcp-server/
 ├── scripts/
 │   ├── build-changelog.ts
 │   ├── build.ts
+│   ├── check-dependency-specifiers.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
