@@ -1,6 +1,6 @@
 {
   "name": "exchange-rates-mcp-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads"

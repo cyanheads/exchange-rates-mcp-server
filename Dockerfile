@@ -8,11 +8,6 @@ FROM oven/bun:1.3.14 AS build
 
 WORKDIR /usr/src/app
 
-# Install build tools required for native modules (@duckdb/node-api requires python3/make/g++)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ && \
-    rm -rf /var/lib/apt/lists/*
-
 # Copy dependency manifests for optimized layer caching
 COPY package.json bun.lock ./
 
@@ -54,10 +49,13 @@ LABEL org.opencontainers.image.version="${APP_VERSION}"
 # Copy dependency manifests
 COPY package.json bun.lock ./
 
-# Copy node_modules from the build stage — avoids reinstalling native modules
-# (@duckdb/node-api requires python3/make/g++ to compile; copying the pre-built
-# artifacts from the build stage keeps the production image free of build tools).
-COPY --from=build /usr/src/app/node_modules ./node_modules
+# Install only production dependencies, ignoring any lifecycle scripts (like 'prepare')
+# that are not needed in the final production image. Peers are omitted too: the
+# framework's optional peers are opt-in tiers this server does not use, and its one
+# required peer (zod) is a direct dependency. The OTEL tier is installed explicitly
+# below; @duckdb/node-api is likewise a direct dependency.
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --production --frozen-lockfile --ignore-scripts --omit=peer
 
 # Conditionally install OpenTelemetry optional peer dependencies (Tier 3).
 # These are not bundled by default to keep the base image lean. Enable at build time
@@ -65,7 +63,7 @@ COPY --from=build /usr/src/app/node_modules ./node_modules
 ARG OTEL_ENABLED=true
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     if [ "$OTEL_ENABLED" = "true" ]; then \
-      bun add --omit=dev --ignore-scripts @hono/otel \
+      bun add --omit=dev --omit=peer --ignore-scripts @hono/otel \
         @opentelemetry/instrumentation-http \
         @opentelemetry/exporter-metrics-otlp-http \
         @opentelemetry/exporter-trace-otlp-http \

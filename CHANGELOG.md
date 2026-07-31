@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-07-31
+
+Production Docker image installs its own dependencies instead of inheriting the build stage's devDependencies; drops the unused native-build toolchain
+
 ## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-07-31 · ⚠️ Breaking
 
 fx_convert_currency.amount rejects non-positive values; fx_get_timeseries clips to the requested range and handles same-currency pairs; DataCanvas tools gated off when unconfigured; mcp-ts-core ^0.11.0
