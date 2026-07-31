@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/exchange-rates-mcp-server",
     "source": "github"
   },
-  "version": "0.1.5",
+  "version": "0.2.0",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/exchange-rates-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.1.5",
+      "version": "0.2.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -40,7 +40,7 @@
         },
         {
           "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
-          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics.",
+          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics, when DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb). Longer ranges return inline otherwise.",
           "format": "string",
           "isRequired": false,
           "default": "90"
@@ -62,7 +62,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/exchange-rates-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.1.5",
+      "version": "0.2.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -83,7 +83,7 @@
         },
         {
           "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
-          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics.",
+          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics, when DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb). Longer ranges return inline otherwise.",
           "format": "string",
           "isRequired": false,
           "default": "90"

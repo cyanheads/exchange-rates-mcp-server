@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-07-31 · ⚠️ Breaking
+
+fx_convert_currency.amount rejects non-positive values; fx_get_timeseries clips to the requested range and handles same-currency pairs; DataCanvas tools gated off when unconfigured; mcp-ts-core ^0.11.0
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-06-20
 
 Adopt @cyanheads/mcp-ts-core ^0.10.9; DataCanvas describe() filter and SQL-gate fixes reach fx_dataframe_* tools; new check-dependency-specifiers devcheck step + plugin-manifest packaging checks

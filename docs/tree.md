@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-06-20 11:32:12
+Generated on: 2026-07-31 18:03:39
 
 ```text
 exchange-rates-mcp-server/
@@ -12,15 +12,18 @@ exchange-rates-mcp-server/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -152,6 +155,7 @@ exchange-rates-mcp-server/
 │   │   ├── canvas/
 │   │   │   └── canvas-accessor.ts
 │   │   └── frankfurter/
+│   │       ├── errors.ts
 │   │       ├── frankfurter-service.ts
 │   │       └── types.ts
 │   └── index.ts
@@ -161,6 +165,8 @@ exchange-rates-mcp-server/
 │   │   ├── fx-currencies.resource.test.ts
 │   │   └── fx-rates-latest.resource.test.ts
 │   ├── services/
+│   │   ├── frankfurter-errors.test.ts
+│   │   └── frankfurter-service.test.ts
 │   └── tools/
 │       ├── fx-convert-currency.tool.test.ts
 │       ├── fx-dataframe-describe.tool.test.ts
@@ -171,6 +177,7 @@ exchange-rates-mcp-server/
 │       └── fx-list-currencies.tool.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md
@@ -178,6 +185,7 @@ exchange-rates-mcp-server/
 ├── bun.lock
 ├── bunfig.toml
 ├── CHANGELOG.md
+├── CITATION.cff
 ├── CLAUDE.md
 ├── devcheck.config.json
 ├── Dockerfile
