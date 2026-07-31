@@ -6,6 +6,7 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxGetRate } from '@/mcp-server/tools/definitions/fx-get-rate.tool.js';
+import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/errors.js';
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
@@ -72,12 +73,44 @@ describe('fx_get_rate', () => {
     ).rejects.toMatchObject({ data: { reason: 'date_out_of_range' } });
   });
 
-  it('throws unsupported_currency when service returns not found', async () => {
-    mockGetRate.mockRejectedValue(new Error('not found: unsupported'));
+  it('throws unsupported_currency naming the offending field', async () => {
+    mockGetRate.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
     const ctx = createMockContext({ errors: fxGetRate.errors });
     await expect(
       fxGetRate.handler({ base_currency: 'XYZ', quote_currency: 'EUR' }, ctx),
-    ).rejects.toMatchObject({ data: { reason: 'unsupported_currency' } });
+    ).rejects.toMatchObject({
+      data: { field: 'base_currency', reason: 'unsupported_currency' },
+      message: expect.stringContaining('XYZ'),
+    });
+  });
+
+  it('throws invalid_date_format for a malformed date, never unsupported_currency', async () => {
+    const ctx = createMockContext({ errors: fxGetRate.errors });
+    await expect(
+      fxGetRate.handler({ base_currency: 'USD', quote_currency: 'EUR', date: '2024-6-1' }, ctx),
+    ).rejects.toMatchObject({
+      data: {
+        field: 'date',
+        reason: 'invalid_date_format',
+        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
+      },
+    });
+    expect(mockGetRate).not.toHaveBeenCalled();
+  });
+
+  it('throws invalid_date_format for a well-shaped but impossible date', async () => {
+    const ctx = createMockContext({ errors: fxGetRate.errors });
+    await expect(
+      fxGetRate.handler({ base_currency: 'USD', quote_currency: 'EUR', date: '2024-02-31' }, ctx),
+    ).rejects.toMatchObject({ data: { reason: 'invalid_date_format' } });
+  });
+
+  it('throws upstream_no_data when the ECB published no rate for the date', async () => {
+    mockGetRate.mockRejectedValue(upstreamNoData('/2000-01-04?base=ILS&symbols=EUR'));
+    const ctx = createMockContext({ errors: fxGetRate.errors });
+    await expect(
+      fxGetRate.handler({ base_currency: 'ILS', quote_currency: 'EUR', date: '2000-01-04' }, ctx),
+    ).rejects.toMatchObject({ data: { reason: 'upstream_no_data' } });
   });
 
   it('format renders rate without snap note when not snapped', () => {

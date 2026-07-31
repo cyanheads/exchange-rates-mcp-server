@@ -5,13 +5,15 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import type { CanvasInstance } from '@cyanheads/mcp-ts-core/canvas';
-import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
 
 export const fxDataframeDescribe = tool('fx_dataframe_describe', {
   description:
     'List tables and columns staged on a DataCanvas from a prior fx_get_timeseries call. ' +
-    'Required first step before fx_dataframe_query — use it to discover table names and column schemas.',
+    'Required first step before fx_dataframe_query — use it to discover table names and column schemas. ' +
+    'Requires DataCanvas (CANVAS_PROVIDER_TYPE=duckdb) — without it this tool is not listed at all ' +
+    'and fx_get_timeseries returns every range inline.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -71,8 +73,10 @@ export const fxDataframeDescribe = tool('fx_dataframe_describe', {
     try {
       instance = await canvas.acquire(input.canvas_id, ctx);
     } catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (msg.includes('not found') || msg.includes('NotFound')) {
+      /** The canvas layer stamps a contract `reason` on its own throws — read that, don't match prose. */
+      const reason =
+        err instanceof McpError ? (err.data as { reason?: string } | undefined)?.reason : undefined;
+      if (reason === 'canvas_not_found') {
         throw ctx.fail(
           'canvas_not_found',
           `Canvas "${input.canvas_id}" not found or has expired.`,

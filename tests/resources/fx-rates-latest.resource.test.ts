@@ -7,6 +7,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxRatesLatestResource } from '@/mcp-server/resources/definitions/fx-rates-latest.resource.js';
+import { unsupportedCurrency } from '@/services/frankfurter/errors.js';
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { FrankfurterRateResponse } from '@/services/frankfurter/types.js';
 
@@ -49,17 +50,26 @@ describe('fxRatesLatestResource', () => {
   });
 
   it('throws ValidationError (-32007) for unsupported base currency', async () => {
-    mockGetRates.mockRejectedValue(new Error('not found: {"message":"not found"}'));
+    mockGetRates.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
     const ctx = createMockContext();
     const params = fxRatesLatestResource.params.parse({ base: 'XYZ' });
 
     await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
+      data: { field: 'base_currency', reason: 'unsupported_currency' },
       message: expect.stringMatching(/not supported by the ECB/),
     });
     await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
       message: expect.stringMatching(/fx_list_currencies/),
     });
+  });
+
+  it('re-raises an upstream failure it cannot classify', async () => {
+    mockGetRates.mockRejectedValue(new Error('Frankfurter API unreachable: ECONNRESET'));
+    const ctx = createMockContext();
+    const params = fxRatesLatestResource.params.parse({ base: 'USD' });
+
+    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toThrow(/ECONNRESET/);
   });
 
   it('lists available resources with example URIs', () => {

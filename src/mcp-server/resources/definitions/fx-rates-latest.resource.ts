@@ -5,6 +5,7 @@
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
+import { failureOf } from '@/services/frankfurter/errors.js';
 import { getFrankfurterService } from '@/services/frankfurter/frankfurter-service.js';
 
 export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
@@ -38,11 +39,11 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
     try {
       raw = await service.getRates(params.base, 'latest');
     } catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (msg.includes('not found')) {
+      const failure = failureOf(err);
+      if (failure?.reason === 'unsupported_currency') {
         throw validationError(
-          `Currency "${params.base}" is not supported by the ECB. Call fx_list_currencies to get valid codes.`,
-          { base: params.base },
+          `${(err as Error).message} Call fx_list_currencies to get valid codes.`,
+          { base: params.base, field: failure.field, reason: failure.reason },
           { cause: err },
         );
       }

@@ -5,9 +5,11 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { failureOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
+  isIsoDate,
 } from '@/services/frankfurter/frankfurter-service.js';
 import type { FrankfurterRateResponse } from '@/services/frankfurter/types.js';
 
@@ -16,7 +18,8 @@ export const fxGetRates = tool('fx_get_rates', {
     'Get all available exchange rates for one base currency in a single snapshot. ' +
     'Useful for bulk comparison and seeding downstream tools. ' +
     'Returns a map of quote currency → rate plus the snapshot date. ' +
-    'Optionally filter to a subset of quote currencies via symbols.',
+    'Optionally filter to a subset of quote currencies via symbols. ' +
+    'Listing the base currency itself in symbols is accepted and returns a rate of 1 for it.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -40,7 +43,8 @@ export const fxGetRates = tool('fx_get_rates', {
       .optional()
       .describe(
         'Optional list of quote currency codes to filter the response. ' +
-          'Omit to return all ~30 supported currencies.',
+          'Omit to return all ~30 supported currencies (the base is not among them). ' +
+          'Including base_currency here is valid — it comes back with a rate of 1.',
       ),
   }),
   output: z.object({
@@ -64,9 +68,15 @@ export const fxGetRates = tool('fx_get_rates', {
 
   errors: [
     {
+      reason: 'invalid_date_format',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'date is not a real calendar date written as YYYY-MM-DD.',
+      recovery: 'Pass an ISO 8601 calendar date in YYYY-MM-DD form, for example 2024-06-01.',
+    },
+    {
       reason: 'unsupported_currency',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'base_currency is not in the ECB currency set.',
+      when: 'base_currency or an entry in symbols is not in the ECB currency set.',
       recovery: 'Call fx_list_currencies to get the list of valid currency codes.',
     },
     {
@@ -75,6 +85,12 @@ export const fxGetRates = tool('fx_get_rates', {
       when: 'date is before 1999-01-04 or in the future.',
       recovery: 'ECB data starts 1999-01-04; omit date for the latest available rate.',
     },
+    {
+      reason: 'upstream_no_data',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'Every requested currency is supported but the ECB published no rates for this date.',
+      recovery: 'Try a more recent date — ECB history starts later for some currencies.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -82,6 +98,14 @@ export const fxGetRates = tool('fx_get_rates', {
     const date = input.date ?? 'latest';
 
     if (date !== 'latest') {
+      /** Format first — the range comparisons below are lexicographic and would misread a malformed date. */
+      if (!isIsoDate(date)) {
+        throw ctx.fail(
+          'invalid_date_format',
+          `date "${date}" is not a valid YYYY-MM-DD calendar date.`,
+          { ...ctx.recoveryFor('invalid_date_format'), field: 'date' },
+        );
+      }
       if (date < ECB_START_DATE) {
         throw ctx.fail(
           'date_out_of_range',
@@ -103,12 +127,21 @@ export const fxGetRates = tool('fx_get_rates', {
     try {
       raw = await service.getRates(input.base_currency, date, input.symbols);
     } catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (msg.includes('not found')) {
+      const failure = failureOf(err);
+      if (failure?.reason === 'unsupported_currency') {
+        /** The service names the offending field and codes — base_currency and symbols are both reachable here. */
+        throw ctx.fail('unsupported_currency', (err as Error).message, {
+          ...ctx.recoveryFor('unsupported_currency'),
+          field: failure.field,
+        });
+      }
+      if (failure?.reason === 'upstream_no_data') {
         throw ctx.fail(
-          'unsupported_currency',
-          `Currency "${input.base_currency}" is not supported by the ECB.`,
-          { ...ctx.recoveryFor('unsupported_currency') },
+          'upstream_no_data',
+          `The ECB published no ${input.base_currency} rates for ${
+            date === 'latest' ? 'the latest business day' : date
+          }.`,
+          { ...ctx.recoveryFor('upstream_no_data') },
         );
       }
       throw err;

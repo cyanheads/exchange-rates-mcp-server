@@ -5,14 +5,16 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import type { CanvasInstance, QueryResult } from '@cyanheads/mcp-ts-core/canvas';
-import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
 
 export const fxDataframeQuery = tool('fx_dataframe_query', {
   description:
     'Run a read-only SQL SELECT against DataCanvas tables staged by fx_get_timeseries. ' +
     'Supports aggregations, GROUP BY, window functions, and JOINs across multiple registered tables. ' +
-    'Run fx_dataframe_describe first to discover table names and column schemas.',
+    'Run fx_dataframe_describe first to discover table names and column schemas. ' +
+    'Requires DataCanvas (CANVAS_PROVIDER_TYPE=duckdb) — without it this tool is not listed at all ' +
+    'and fx_get_timeseries returns every range inline.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -70,9 +72,16 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       recovery: 'Re-run fx_get_timeseries to obtain a fresh canvas_id.',
     },
     {
+      reason: 'missing_table',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The SQL references a table that is not staged on this canvas, or whose TTL expired.',
+      recovery:
+        'Call fx_dataframe_describe to list the staged tables, or re-run fx_get_timeseries.',
+    },
+    {
       reason: 'invalid_query',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'SQL is not a SELECT, references unknown tables/columns, or has a syntax error.',
+      when: 'SQL is not a SELECT, references unknown columns, or has a syntax error.',
       recovery: 'Run fx_dataframe_describe first to verify table and column names.',
     },
   ],
@@ -83,12 +92,15 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       throw serviceUnavailable('DataCanvas is not enabled. Set CANVAS_PROVIDER_TYPE=duckdb.');
     }
 
+    /** The canvas layer stamps a contract `reason` on its own throws — read that, don't match prose. */
+    const reasonOf = (err: unknown): string | undefined =>
+      err instanceof McpError ? (err.data as { reason?: string } | undefined)?.reason : undefined;
+
     let instance: CanvasInstance;
     try {
       instance = await canvas.acquire(input.canvas_id, ctx);
     } catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (msg.includes('not found') || msg.includes('NotFound')) {
+      if (reasonOf(err) === 'canvas_not_found') {
         throw ctx.fail(
           'canvas_not_found',
           `Canvas "${input.canvas_id}" not found or has expired.`,
@@ -104,16 +116,30 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     try {
       result = await instance.query(input.query, { signal: ctx.signal });
     } catch (err) {
+      const reason = reasonOf(err);
+      if (reason === 'canvas_not_found') {
+        throw ctx.fail(
+          'canvas_not_found',
+          `Canvas "${input.canvas_id}" not found or has expired.`,
+          {
+            ...ctx.recoveryFor('canvas_not_found'),
+          },
+        );
+      }
+      if (reason === 'missing_table') {
+        throw ctx.fail('missing_table', (err as Error).message, {
+          ...ctx.recoveryFor('missing_table'),
+        });
+      }
+      /** An aborted query is a Timeout, not a rejected statement — don't blame the caller's SQL for it. */
+      if (reason === 'cancelled') throw err;
       const msg = (err as Error).message ?? '';
-      // ValidationError from the four-layer gate, or DuckDB parse errors
+      // Remaining SQL-gate rejections: non-SELECT statements, binder and syntax errors.
       if (
-        msg.includes('ValidationError') ||
+        reason !== undefined ||
         msg.includes('SELECT') ||
         msg.includes('syntax') ||
-        msg.includes('not found') ||
         msg.includes('does not exist') ||
-        msg.includes('read_csv') ||
-        msg.includes('register_as_clash') ||
         (err as { code?: string }).code === 'ValidationError'
       ) {
         throw ctx.fail('invalid_query', `SQL query rejected: ${msg}`, {

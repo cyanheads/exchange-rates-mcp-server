@@ -3,6 +3,7 @@
  * @module tests/tools/fx-dataframe-describe.tool.test
  */
 
+import { notFound } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxDataframeDescribe } from '@/mcp-server/tools/definitions/fx-dataframe-describe.tool.js';
@@ -57,8 +58,14 @@ describe('fx_dataframe_describe', () => {
     expect(result.tables[0].columns[0].name).toBe('date');
   });
 
+  /** Mirrors the registry's own throw — the handler classifies on `data.reason`, not the message. */
   it('throws canvas_not_found for missing canvas', async () => {
-    mockAcquire.mockRejectedValue(new Error('not found: canvas expired'));
+    mockAcquire.mockRejectedValue(
+      notFound('Canvas not found or expired.', {
+        canvasId: 'expired123',
+        reason: 'canvas_not_found',
+      }),
+    );
     mockGetCanvas.mockReturnValue({
       acquire: mockAcquire,
     } as unknown as ReturnType<typeof canvasModule.getCanvas>);
@@ -67,6 +74,18 @@ describe('fx_dataframe_describe', () => {
     await expect(
       fxDataframeDescribe.handler({ canvas_id: 'expired123' }, ctx),
     ).rejects.toMatchObject({ data: { reason: 'canvas_not_found' } });
+  });
+
+  it('rethrows an unclassified acquire failure instead of blaming the canvas_id', async () => {
+    mockAcquire.mockRejectedValue(new Error('duckdb worker crashed'));
+    mockGetCanvas.mockReturnValue({
+      acquire: mockAcquire,
+    } as unknown as ReturnType<typeof canvasModule.getCanvas>);
+
+    const ctx = createMockContext({ errors: fxDataframeDescribe.errors });
+    await expect(fxDataframeDescribe.handler({ canvas_id: 'abc1234567' }, ctx)).rejects.toThrow(
+      'duckdb worker crashed',
+    );
   });
 
   it('format renders table schema', () => {

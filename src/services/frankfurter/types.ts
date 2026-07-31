@@ -56,3 +56,18 @@ export interface SeriesRow extends Record<string, unknown> {
   quote_currency: string;
   rate: number;
 }
+
+/**
+ * A time series clipped to the caller's requested window. Frankfurter's own
+ * `start_date`/`end_date` echo the window it *served*, which opens earlier than
+ * the requested one whenever the range starts on a non-publication day. These
+ * bounds never fall outside what the caller asked for.
+ */
+export interface TimeSeriesResult {
+  /** Last publication date inside the requested window; the requested end when there is none. */
+  endDate: string;
+  /** Publication days inside the requested window, ascending by date. May be empty. */
+  rows: SeriesRow[];
+  /** First publication date inside the requested window; the requested start when there is none. */
+  startDate: string;
+}

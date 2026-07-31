@@ -3,9 +3,11 @@
  * @module tests/tools/fx-convert-currency.tool.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxConvertCurrency } from '@/mcp-server/tools/definitions/fx-convert-currency.tool.js';
+import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/errors.js';
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
@@ -74,12 +76,64 @@ describe('fx_convert_currency', () => {
     ).rejects.toMatchObject({ data: { reason: 'date_out_of_range' } });
   });
 
-  it('throws unsupported_currency when service returns not found', async () => {
-    mockGetRate.mockRejectedValue(new Error('not found: xyz'));
+  it('throws unsupported_currency naming the offending field', async () => {
+    mockGetRate.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
     const ctx = createMockContext({ errors: fxConvertCurrency.errors });
     await expect(
       fxConvertCurrency.handler({ base_currency: 'XYZ', quote_currency: 'EUR', amount: 1 }, ctx),
-    ).rejects.toMatchObject({ data: { reason: 'unsupported_currency' } });
+    ).rejects.toMatchObject({
+      data: { field: 'base_currency', reason: 'unsupported_currency' },
+      message: expect.stringContaining('XYZ'),
+    });
+  });
+
+  it('throws invalid_date_format for a malformed date, never unsupported_currency', async () => {
+    const ctx = createMockContext({ errors: fxConvertCurrency.errors });
+    await expect(
+      fxConvertCurrency.handler(
+        { base_currency: 'USD', quote_currency: 'EUR', amount: 1, date: '2024-6-1' },
+        ctx,
+      ),
+    ).rejects.toMatchObject({
+      data: {
+        field: 'date',
+        reason: 'invalid_date_format',
+        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
+      },
+    });
+    expect(mockGetRate).not.toHaveBeenCalled();
+  });
+
+  it('throws upstream_no_data when the ECB published no rate for the date', async () => {
+    mockGetRate.mockRejectedValue(upstreamNoData('/2000-01-04?base=ILS&symbols=EUR'));
+    const ctx = createMockContext({ errors: fxConvertCurrency.errors });
+    await expect(
+      fxConvertCurrency.handler(
+        { base_currency: 'ILS', quote_currency: 'EUR', amount: 1, date: '2000-01-04' },
+        ctx,
+      ),
+    ).rejects.toMatchObject({ data: { reason: 'upstream_no_data' } });
+  });
+
+  describe('amount contract', () => {
+    const validInput = { base_currency: 'USD', quote_currency: 'EUR' };
+
+    it('accepts a positive amount', () => {
+      expect(fxConvertCurrency.input.safeParse({ ...validInput, amount: 100 }).success).toBe(true);
+    });
+
+    it.each([0, -100])('rejects amount %d at schema validation', (amount) => {
+      const parsed = fxConvertCurrency.input.safeParse({ ...validInput, amount });
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues[0]?.path).toEqual(['amount']);
+    });
+
+    it('advertises the constraint in the serialized input schema', () => {
+      const schema = z.toJSONSchema(fxConvertCurrency.input) as {
+        properties: { amount: { exclusiveMinimum?: number } };
+      };
+      expect(schema.properties.amount.exclusiveMinimum).toBe(0);
+    });
   });
 
   it('format renders conversion result', () => {

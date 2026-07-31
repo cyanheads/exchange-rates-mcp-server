@@ -6,6 +6,7 @@
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxGetRates } from '@/mcp-server/tools/definitions/fx-get-rates.tool.js';
+import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/errors.js';
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { FrankfurterRateResponse } from '@/services/frankfurter/types.js';
 
@@ -38,6 +39,38 @@ describe('fx_get_rates', () => {
     expect(result.source).toBe('ECB via Frankfurter');
   });
 
+  /**
+   * The base is stripped from the upstream `symbols` and answered locally, so the
+   * handler must forward the caller's list verbatim and pass the injected rate through.
+   */
+  it('passes symbols containing the base straight through to the service', async () => {
+    mockGetRates.mockResolvedValue({
+      amount: 1,
+      base: 'USD',
+      date: '2024-06-04',
+      rates: { EUR: 0.92, USD: 1 },
+    });
+    const ctx = createMockContext({ errors: fxGetRates.errors });
+    const result = await fxGetRates.handler({ base_currency: 'USD', symbols: ['USD', 'EUR'] }, ctx);
+
+    expect(mockGetRates).toHaveBeenCalledWith('USD', 'latest', ['USD', 'EUR']);
+    expect(result.rates).toEqual({ EUR: 0.92, USD: 1 });
+  });
+
+  it('returns only the identity rate when the base is the sole symbol', async () => {
+    mockGetRates.mockResolvedValue({
+      amount: 1,
+      base: 'USD',
+      date: '2024-06-04',
+      rates: { USD: 1 },
+    });
+    const ctx = createMockContext({ errors: fxGetRates.errors });
+    const result = await fxGetRates.handler({ base_currency: 'USD', symbols: ['USD'] }, ctx);
+
+    expect(result.rates).toEqual({ USD: 1 });
+    expect(result.rate_date).toBe('2024-06-04');
+  });
+
   it('throws date_out_of_range for historical date before ECB start', async () => {
     const ctx = createMockContext({ errors: fxGetRates.errors });
     await expect(
@@ -45,12 +78,56 @@ describe('fx_get_rates', () => {
     ).rejects.toMatchObject({ data: { reason: 'date_out_of_range' } });
   });
 
-  it('throws unsupported_currency when service returns not found', async () => {
-    mockGetRates.mockRejectedValue(new Error('not found: unknown base'));
+  it('throws unsupported_currency for an unknown base_currency', async () => {
+    mockGetRates.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
     const ctx = createMockContext({ errors: fxGetRates.errors });
     await expect(fxGetRates.handler({ base_currency: 'XYZ' }, ctx)).rejects.toMatchObject({
-      data: { reason: 'unsupported_currency' },
+      data: { field: 'base_currency', reason: 'unsupported_currency' },
     });
+  });
+
+  it('blames symbols, not the valid base_currency, for an unsupported symbol', async () => {
+    mockGetRates.mockRejectedValue(unsupportedCurrency('symbols', ['XYZ']));
+    const ctx = createMockContext({ errors: fxGetRates.errors });
+    const rejection = fxGetRates.handler({ base_currency: 'USD', symbols: ['XYZ'] }, ctx);
+
+    await expect(rejection).rejects.toMatchObject({
+      data: { field: 'symbols', reason: 'unsupported_currency' },
+      message: expect.stringContaining('XYZ'),
+    });
+    await expect(rejection).rejects.toMatchObject({
+      message: expect.not.stringContaining('USD'),
+    });
+  });
+
+  it('names every unsupported symbol when several are bad', async () => {
+    mockGetRates.mockRejectedValue(unsupportedCurrency('symbols', ['XYZ', 'ABC']));
+    const ctx = createMockContext({ errors: fxGetRates.errors });
+    await expect(
+      fxGetRates.handler({ base_currency: 'USD', symbols: ['XYZ', 'EUR', 'ABC'] }, ctx),
+    ).rejects.toMatchObject({ message: expect.stringContaining('XYZ, ABC') });
+  });
+
+  it('throws invalid_date_format for a malformed date, never unsupported_currency', async () => {
+    const ctx = createMockContext({ errors: fxGetRates.errors });
+    await expect(
+      fxGetRates.handler({ base_currency: 'USD', date: '2024-6-1' }, ctx),
+    ).rejects.toMatchObject({
+      data: {
+        field: 'date',
+        reason: 'invalid_date_format',
+        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
+      },
+    });
+    expect(mockGetRates).not.toHaveBeenCalled();
+  });
+
+  it('throws upstream_no_data when the ECB published no rates for the date', async () => {
+    mockGetRates.mockRejectedValue(upstreamNoData('/2000-01-04?base=ILS'));
+    const ctx = createMockContext({ errors: fxGetRates.errors });
+    await expect(
+      fxGetRates.handler({ base_currency: 'ILS', date: '2000-01-04' }, ctx),
+    ).rejects.toMatchObject({ data: { reason: 'upstream_no_data' } });
   });
 
   it('format renders all rate fields', () => {

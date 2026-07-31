@@ -3,6 +3,7 @@
  * @module tests/tools/fx-dataframe-query.tool.test
  */
 
+import { notFound, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxDataframeQuery } from '@/mcp-server/tools/definitions/fx-dataframe-query.tool.js';
@@ -82,8 +83,14 @@ describe('fx_dataframe_query', () => {
     expect(result.row_count).toBe(10_000);
   });
 
+  /** Mirrors the registry's own throw — the handler classifies on `data.reason`, not the message. */
   it('throws canvas_not_found for missing canvas', async () => {
-    mockAcquire.mockRejectedValue(new Error('not found: canvas expired'));
+    mockAcquire.mockRejectedValue(
+      notFound('Canvas not found or expired.', {
+        canvasId: 'expired123',
+        reason: 'canvas_not_found',
+      }),
+    );
     mockGetCanvas.mockReturnValue({
       acquire: mockAcquire,
     } as unknown as ReturnType<typeof canvasModule.getCanvas>);
@@ -101,7 +108,12 @@ describe('fx_dataframe_query', () => {
       expiresAt: '2026-06-05T00:00:00.000Z',
       query: mockQuery,
     });
-    mockQuery.mockRejectedValue(new Error('ValidationError: only SELECT is allowed'));
+    mockQuery.mockRejectedValue(
+      validationError('Canvas query must be SELECT.', {
+        reason: 'non_select_statement',
+        statementType: 'DROP',
+      }),
+    );
     mockGetCanvas.mockReturnValue({
       acquire: mockAcquire,
     } as unknown as ReturnType<typeof canvasModule.getCanvas>);
@@ -112,14 +124,23 @@ describe('fx_dataframe_query', () => {
     ).rejects.toMatchObject({ data: { reason: 'invalid_query' } });
   });
 
-  it('throws invalid_query for unknown table reference', async () => {
+  /**
+   * The canvas layer distinguishes an unstaged table from bad SQL — an unknown
+   * table is `missing_table` (re-stage), not `invalid_query` (rewrite the SQL).
+   */
+  it('throws missing_table when the SQL references an unstaged table', async () => {
     mockAcquire.mockResolvedValue({
       canvasId: 'abc1234567',
       isNew: false,
       expiresAt: '2026-06-05T00:00:00.000Z',
       query: mockQuery,
     });
-    mockQuery.mockRejectedValue(new Error('Table does not exist: fx_nonexistent'));
+    mockQuery.mockRejectedValue(
+      notFound('Canvas table "fx_nonexistent" does not exist.', {
+        reason: 'missing_table',
+        tableName: 'fx_nonexistent',
+      }),
+    );
     mockGetCanvas.mockReturnValue({
       acquire: mockAcquire,
     } as unknown as ReturnType<typeof canvasModule.getCanvas>);
@@ -128,6 +149,32 @@ describe('fx_dataframe_query', () => {
     await expect(
       fxDataframeQuery.handler(
         { canvas_id: 'abc1234567', query: 'SELECT * FROM fx_nonexistent' },
+        ctx,
+      ),
+    ).rejects.toMatchObject({
+      data: {
+        reason: 'missing_table',
+        recovery: { hint: expect.stringContaining('fx_dataframe_describe') },
+      },
+    });
+  });
+
+  it('throws invalid_query for an unclassified binder error on SELECT-shaped SQL', async () => {
+    mockAcquire.mockResolvedValue({
+      canvasId: 'abc1234567',
+      isNew: false,
+      expiresAt: '2026-06-05T00:00:00.000Z',
+      query: mockQuery,
+    });
+    mockQuery.mockRejectedValue(new Error('Binder Error: column "rat" does not exist'));
+    mockGetCanvas.mockReturnValue({
+      acquire: mockAcquire,
+    } as unknown as ReturnType<typeof canvasModule.getCanvas>);
+
+    const ctx = createMockContext({ errors: fxDataframeQuery.errors });
+    await expect(
+      fxDataframeQuery.handler(
+        { canvas_id: 'abc1234567', query: 'SELECT rat FROM fx_usd_eur' },
         ctx,
       ),
     ).rejects.toMatchObject({ data: { reason: 'invalid_query' } });

@@ -8,19 +8,26 @@ import { spillover } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
+import { failureOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
+  isIsoDate,
 } from '@/services/frankfurter/frankfurter-service.js';
-import type { FrankfurterSeriesResponse, SeriesRow } from '@/services/frankfurter/types.js';
+import type { TimeSeriesResult } from '@/services/frankfurter/types.js';
 
 export const fxGetTimeseries = tool('fx_get_timeseries', {
   description:
     'Get historical daily exchange rates for a currency pair over a date range. ' +
-    'ECB publishes on business days only — weekends and holidays produce no entry (not snapped). ' +
+    'ECB publishes on business days only — weekends and holidays produce no entry, and no date ' +
+    'outside the requested range is ever returned, so a range covering only non-publication days ' +
+    'comes back with an empty rates map and a notice explaining why. ' +
+    'A same-currency pair returns a rate of 1 on each publication day in the range. ' +
     'Short ranges (≤90 days by default) are returned inline as a date→rate map. ' +
-    'Long ranges spill to DataCanvas: the response carries spilled=true, a canvas_id, and a table_name. ' +
-    'Call fx_dataframe_describe to inspect the staged table, then fx_dataframe_query to run SQL against it.',
+    'When DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb) long ranges spill to it: the response ' +
+    'carries spilled=true, a canvas_id, and a table_name — call fx_dataframe_describe to inspect the ' +
+    'staged table, then fx_dataframe_query to run SQL against it. ' +
+    'Without DataCanvas long ranges stay inline (spilled=false) and the notice says so.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -62,20 +69,25 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     start_date: z
       .string()
       .describe(
-        'Actual first date in the returned series (may differ from requested if that date had no ECB fix).',
+        'First date in the returned series. Always inside the requested range — later than the ' +
+          'requested start when that day had no ECB fix, and equal to it when the series is empty.',
       ),
     end_date: z
       .string()
       .describe(
-        'Actual last date in the returned series (may differ from requested if that date had no ECB fix).',
+        'Last date in the returned series. Always inside the requested range — earlier than the ' +
+          'requested end when that day had no ECB fix, and equal to it when the series is empty.',
       ),
     rates: z
       .record(z.string(), z.number())
       .describe(
-        'Date → rate map for the inline result. Business days only. ' +
-          'Empty when the result was spilled to canvas.',
+        'Date → rate map for the inline result. Publication days inside the requested range only. ' +
+          'Truncated to a preview when the result was spilled to canvas; empty when the range ' +
+          'contains no publication day at all.',
       ),
-    rate_count: z.number().describe('Total number of data points (business days) in the range.'),
+    rate_count: z
+      .number()
+      .describe('Total number of data points (publication days) inside the requested range.'),
     rate_type: z
       .string()
       .describe(
@@ -97,7 +109,23 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .describe('Canvas table name — present when spilled is true. Use in fx_dataframe_query SQL.'),
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Explains a result that would otherwise look broken — an empty series, or a long range ' +
+          'that stayed inline because DataCanvas is not configured.',
+      ),
+  },
+
   errors: [
+    {
+      reason: 'invalid_date_format',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'start_date or end_date is not a real calendar date written as YYYY-MM-DD.',
+      recovery: 'Pass ISO 8601 calendar dates in YYYY-MM-DD form, for example 2024-06-01.',
+    },
     {
       reason: 'unsupported_currency',
       code: JsonRpcErrorCode.ValidationError,
@@ -116,6 +144,12 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       when: 'start_date is after end_date.',
       recovery: 'Ensure start_date is before or equal to end_date.',
     },
+    {
+      reason: 'upstream_no_data',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'Both currencies are supported but the ECB published no rates across this range.',
+      recovery: 'Try a more recent range — ECB history starts later for some currencies.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -123,7 +157,22 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     const config = getServerConfig();
     const today = new Date().toISOString().slice(0, 10);
 
-    // Validate dates
+    /**
+     * Format first. Every check below — the ECB epoch bound, the future bound, and
+     * the start/end ordering — is a lexicographic string comparison, so a malformed
+     * date silently reads as an out-of-range or reversed range instead of a bad date.
+     */
+    for (const field of ['start_date', 'end_date'] as const) {
+      const value = input[field];
+      if (!isIsoDate(value)) {
+        throw ctx.fail(
+          'invalid_date_format',
+          `${field} "${value}" is not a valid YYYY-MM-DD calendar date.`,
+          { ...ctx.recoveryFor('invalid_date_format'), field },
+        );
+      }
+    }
+
     if (input.start_date < ECB_START_DATE) {
       throw ctx.fail(
         'date_out_of_range',
@@ -153,29 +202,33 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     const dayCount =
       (new Date(input.end_date).getTime() - new Date(input.start_date).getTime()) / msPerDay + 1;
 
-    let raw: FrankfurterSeriesResponse;
-    let rows: SeriesRow[];
+    let series: TimeSeriesResult;
     try {
-      ({ raw, rows } = await service.getTimeSeries(
+      series = await service.getTimeSeries(
         input.base_currency,
         input.quote_currency,
         input.start_date,
         input.end_date,
-      ));
+      );
     } catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (msg.includes('not found')) {
+      const failure = failureOf(err);
+      if (failure?.reason === 'unsupported_currency') {
+        throw ctx.fail('unsupported_currency', (err as Error).message, {
+          ...ctx.recoveryFor('unsupported_currency'),
+          field: failure.field,
+        });
+      }
+      if (failure?.reason === 'upstream_no_data') {
         throw ctx.fail(
-          'unsupported_currency',
-          `Currency "${input.base_currency}" or "${input.quote_currency}" not available from ECB.`,
-          { ...ctx.recoveryFor('unsupported_currency') },
+          'upstream_no_data',
+          `The ECB published no ${input.base_currency}/${input.quote_currency} rates between ${input.start_date} and ${input.end_date}.`,
+          { ...ctx.recoveryFor('upstream_no_data') },
         );
       }
       throw err;
     }
 
-    const actualStart = raw.start_date;
-    const actualEnd = raw.end_date;
+    const { rows, startDate: actualStart, endDate: actualEnd } = series;
 
     ctx.log.info('Fetched timeseries', {
       base: input.base_currency,
@@ -186,24 +239,44 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       dayCount,
     });
 
-    // Inline path — short range
     const canvas = getCanvas();
-    const shouldSpill = canvas != null && dayCount > config.timeseriesCanvasThresholdDays;
+    const exceedsThreshold = dayCount > config.timeseriesCanvasThresholdDays;
+    const shouldSpill = canvas != null && exceedsThreshold;
 
+    /**
+     * An empty series and a long range that never spilled both look like failures
+     * from the outside. Say which one happened and why, on both client surfaces.
+     */
+    if (rows.length === 0) {
+      ctx.enrich.notice(
+        `The ECB published no ${input.base_currency.toUpperCase()}/${input.quote_currency.toUpperCase()} rate between ` +
+          `${input.start_date} and ${input.end_date}. Reference rates are published on TARGET business days ` +
+          'only, so a range covering just a weekend or a bank holiday is legitimately empty rather than ' +
+          'broken. Widen the range — a window spanning several weekdays will contain a publication day.',
+      );
+    } else if (exceedsThreshold && canvas == null) {
+      ctx.enrich.notice(
+        `This ${dayCount}-day range is past the ${config.timeseriesCanvasThresholdDays}-day spill threshold, but ` +
+          'DataCanvas is not configured on this server, so the full series is inline and spilled is false. ' +
+          'Set CANVAS_PROVIDER_TYPE=duckdb to stage long ranges for SQL instead.',
+      );
+    }
+
+    /** Fields every branch below returns identically — only rates/count/spill differ. */
+    const envelope = {
+      base_currency: input.base_currency.toUpperCase(),
+      quote_currency: input.quote_currency.toUpperCase(),
+      start_date: actualStart,
+      end_date: actualEnd,
+      rate_type: 'ECB reference (mid-market)',
+      source: 'ECB via Frankfurter',
+    };
+
+    // Inline path — short range, or long range with no canvas to spill to
     if (!shouldSpill) {
       const rateMap: Record<string, number> = {};
       for (const row of rows) rateMap[row.date] = row.rate;
-      return {
-        base_currency: input.base_currency.toUpperCase(),
-        quote_currency: input.quote_currency.toUpperCase(),
-        start_date: actualStart,
-        end_date: actualEnd,
-        rates: rateMap,
-        rate_count: rows.length,
-        rate_type: 'ECB reference (mid-market)',
-        source: 'ECB via Frankfurter',
-        spilled: false,
-      };
+      return { ...envelope, rates: rateMap, rate_count: rows.length, spilled: false };
     }
 
     // Canvas spillover path
@@ -234,14 +307,9 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
 
     if (spillResult.spilled) {
       return {
-        base_currency: input.base_currency.toUpperCase(),
-        quote_currency: input.quote_currency.toUpperCase(),
-        start_date: actualStart,
-        end_date: actualEnd,
+        ...envelope,
         rates: previewRates,
         rate_count: spillResult.handle.rowCount,
-        rate_type: 'ECB reference (mid-market)',
-        source: 'ECB via Frankfurter',
         spilled: true,
         canvas_id: instance.canvasId,
         table_name: spillResult.handle.tableName,
@@ -250,14 +318,9 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
 
     // Fell under budget even at canvas threshold — return inline
     return {
-      base_currency: input.base_currency.toUpperCase(),
-      quote_currency: input.quote_currency.toUpperCase(),
-      start_date: actualStart,
-      end_date: actualEnd,
+      ...envelope,
       rates: previewRates,
       rate_count: spillResult.previewRows.length,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
       spilled: false,
     };
   },
@@ -265,7 +328,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
   format: (result) => {
     const lines: string[] = [
       `**${result.base_currency}/${result.quote_currency} time series** — ${result.start_date} to ${result.end_date}`,
-      `*${result.rate_count} business-day data points · ${result.rate_type} · ${result.source} · spilled: ${result.spilled}*`,
+      `*${result.rate_count} publication-day data points · ${result.rate_type} · ${result.source} · spilled: ${result.spilled}*`,
     ];
 
     if (result.spilled) {
