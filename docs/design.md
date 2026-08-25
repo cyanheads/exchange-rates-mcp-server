@@ -13,6 +13,7 @@
 | `fx_list_currencies` | All supported ISO 4217 currency codes with their full names. Use before converting to disambiguate "dollars" (USD vs AUD vs CAD vs HKD vs SGD) or to validate user-supplied codes. | *(none)* | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 | `fx_dataframe_describe` | List DataCanvas tables and columns from a prior `fx_get_timeseries` call that returned a `canvas_id`. Required first step before `fx_dataframe_query`. | `canvas_id` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 | `fx_dataframe_query` | Run a SQL SELECT against a DataCanvas table produced by `fx_get_timeseries`. Supports aggregations, GROUP BY, and JOINs across multiple registered tables. | `canvas_id`, `query` | `readOnlyHint: true`, `openWorldHint: false` |
+| `fx_dataframe_drop` | Permanently remove one staged table or view from a DataCanvas. Deletes staged analytical data only; ECB rate data is untouched and the series can be re-staged. Opt-in via `FX_ENABLE_CANVAS_DROP`; registered with `disabledTool()` while the flag is off. | `canvas_id`, `table_name` | `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 
 ### Error Contracts
 
@@ -20,20 +21,31 @@ Domain failures to declare as `errors: [{ reason, code, when }]` on each tool. B
 
 | Tool | `reason` | Code | When |
 |:-----|:---------|:-----|:-----|
-| `fx_convert_currency` | `unsupported_currency` | `InvalidParams` | `base_currency` or `quote_currency` is not in the ECB currency set |
-| `fx_convert_currency` | `date_out_of_range` | `InvalidParams` | `date` is before 1999-01-04 or in the future |
-| `fx_get_rate` | `unsupported_currency` | `InvalidParams` | `base_currency` or `quote_currency` is not in the ECB currency set |
-| `fx_get_rate` | `date_out_of_range` | `InvalidParams` | `date` is before 1999-01-04 or in the future |
-| `fx_get_rates` | `unsupported_currency` | `InvalidParams` | `base_currency` is not in the ECB currency set |
-| `fx_get_rates` | `date_out_of_range` | `InvalidParams` | `date` is before 1999-01-04 or in the future |
-| `fx_get_timeseries` | `unsupported_currency` | `InvalidParams` | `base_currency` or `quote_currency` is not in the ECB currency set |
-| `fx_get_timeseries` | `date_out_of_range` | `InvalidParams` | `start_date` is before 1999-01-04 or `end_date` is in the future |
-| `fx_get_timeseries` | `invalid_range` | `InvalidParams` | `start_date` is after `end_date` |
+| `fx_convert_currency` | `invalid_date_format` | `ValidationError` | `date` is not a real calendar date written as YYYY-MM-DD |
+| `fx_convert_currency` | `unsupported_currency` | `ValidationError` | `base_currency` or `quote_currency` is not in the ECB currency set |
+| `fx_convert_currency` | `date_out_of_range` | `ValidationError` | `date` is before 1999-01-04 or in the future |
+| `fx_convert_currency` | `upstream_no_data` | `NotFound` | Every currency is supported but the ECB published no rates for this date |
+| `fx_get_rate` | `invalid_date_format` | `ValidationError` | `date` is not a real calendar date written as YYYY-MM-DD |
+| `fx_get_rate` | `unsupported_currency` | `ValidationError` | `base_currency` or `quote_currency` is not in the ECB currency set |
+| `fx_get_rate` | `date_out_of_range` | `ValidationError` | `date` is before 1999-01-04 or in the future |
+| `fx_get_rate` | `upstream_no_data` | `NotFound` | Every currency is supported but the ECB published no rates for this date |
+| `fx_get_rates` | `invalid_date_format` | `ValidationError` | `date` is not a real calendar date written as YYYY-MM-DD |
+| `fx_get_rates` | `unsupported_currency` | `ValidationError` | `base_currency` is not in the ECB currency set |
+| `fx_get_rates` | `date_out_of_range` | `ValidationError` | `date` is before 1999-01-04 or in the future |
+| `fx_get_rates` | `upstream_no_data` | `NotFound` | Every currency is supported but the ECB published no rates for this date |
+| `fx_get_timeseries` | `invalid_date_format` | `ValidationError` | `start_date` or `end_date` is not a real calendar date written as YYYY-MM-DD |
+| `fx_get_timeseries` | `unsupported_currency` | `ValidationError` | `base_currency` or `quote_currency` is not in the ECB currency set |
+| `fx_get_timeseries` | `date_out_of_range` | `ValidationError` | `start_date` is before 1999-01-04 or `end_date` is in the future |
+| `fx_get_timeseries` | `invalid_range` | `ValidationError` | `start_date` is after `end_date` |
+| `fx_get_timeseries` | `upstream_no_data` | `NotFound` | Every currency is supported but the ECB published no rates for this range |
 | `fx_dataframe_describe` | `canvas_not_found` | `NotFound` | `canvas_id` does not exist or has been evicted |
 | `fx_dataframe_query` | `canvas_not_found` | `NotFound` | `canvas_id` does not exist or has been evicted |
-| `fx_dataframe_query` | `invalid_query` | `InvalidParams` | SQL is not a SELECT, references unknown tables/columns, or has a syntax error |
+| `fx_dataframe_query` | `missing_table` | `NotFound` | The SQL references a table that is not staged on this canvas, or whose TTL expired |
+| `fx_dataframe_query` | `invalid_query` | `ValidationError` | SQL is not a SELECT, references unknown tables/columns, or has a syntax error |
+| `fx_dataframe_drop` | `canvas_not_found` | `NotFound` | `canvas_id` does not exist or has been evicted |
+| `fx_dataframe_drop` | `canvas_unavailable` | `ServiceUnavailable` | DataCanvas is not configured on this deployment |
 
-Recovery hints: `unsupported_currency` → "Call `fx_list_currencies` to get valid codes"; `date_out_of_range` → "ECB data starts 1999-01-04; omit `date` for latest"; `canvas_not_found` → "Re-run `fx_get_timeseries` to obtain a fresh `canvas_id`"; `invalid_query` → "Run `fx_dataframe_describe` first to verify table and column names".
+Recovery hints: `unsupported_currency` → "Call `fx_list_currencies` to get valid codes"; `invalid_date_format` → "Pass an ISO 8601 calendar date in YYYY-MM-DD form"; `date_out_of_range` → "ECB data starts 1999-01-04; omit `date` for latest"; `upstream_no_data` → "Try a more recent date — ECB history starts later for some currencies"; `missing_table` → "Call `fx_dataframe_describe` to list the staged tables"; `canvas_not_found` → "Re-run `fx_get_timeseries` to obtain a fresh `canvas_id`"; `invalid_query` → "Run `fx_dataframe_describe` first to verify table and column names"; `canvas_unavailable` → "Set `CANVAS_PROVIDER_TYPE=duckdb` to enable DataCanvas".
 
 ### Resources
 
