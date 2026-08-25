@@ -6,7 +6,9 @@
  * @module tests/services/frankfurter-service.test
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { config } from '@cyanheads/mcp-ts-core/config';
+import { createFetchMock, type FetchMockHarness } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   getFrankfurterService,
   isIsoDate,
@@ -16,19 +18,25 @@ import {
 /** The ECB reference set, as `/currencies` returns it — trimmed to what these cases touch. */
 const CURRENCIES = { EUR: 'Euro', GBP: 'British Pound', USD: 'US Dollar' };
 
-/** Route the service's fetches by URL, recording each one so callers can assert on them. */
-const stubFetch = (routes: Array<[RegExp, unknown]>) => {
-  const calls: string[] = [];
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url: string) => {
-      calls.push(url);
-      const match = routes.find(([pattern]) => pattern.test(url));
-      if (!match) throw new Error(`unstubbed fetch: ${url}`);
-      return { ok: true, json: async () => match[1] } as unknown as Response;
-    }),
-  );
-  return calls;
+/**
+ * The service reads `globalThis.fetch`, so the upstream boundary is stubbed with the
+ * framework's strict harness: routes answer with real `Response` objects, and any URL
+ * the test did not anticipate throws instead of silently resolving.
+ */
+let http: FetchMockHarness | undefined;
+
+/** Route the service's fetches by URL, answering each with a JSON body. */
+const stubFetch = (routes: Array<[RegExp, unknown]>): void => {
+  http = createFetchMock(routes.map(([match, body]) => ({ match, respond: Response.json(body) })));
+  http.install();
+};
+
+/** URLs requested so far — read after the call under test, since the harness records as it goes. */
+const requestedUrls = (): string[] => http?.calls.map((c) => c.request.url) ?? [];
+
+const restoreFetch = () => {
+  http?.restore();
+  http = undefined;
 };
 
 describe('isIsoDate', () => {
@@ -58,12 +66,29 @@ describe('isIsoDate', () => {
   );
 });
 
+describe('outbound request headers', () => {
+  beforeEach(() => resetFrankfurterService());
+  afterEach(restoreFetch);
+
+  it('identifies itself with the released version, not a hardcoded one', async () => {
+    stubFetch([[/\/currencies$/, CURRENCIES]]);
+
+    await getFrankfurterService().listCurrencies();
+
+    const request = http?.calls[0]?.request;
+    expect(request?.headers.get('user-agent')).toBe(
+      `exchange-rates-mcp-server/${config.mcpServerVersion}`,
+    );
+    expect(request?.headers.get('accept')).toBe('application/json');
+  });
+});
+
 describe('getRate', () => {
   beforeEach(() => resetFrankfurterService());
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(restoreFetch);
 
   it('dates an identity rate to the ECB publication day, flagging the snap like any other pair', async () => {
-    const calls = stubFetch([
+    stubFetch([
       [/\/currencies$/, CURRENCIES],
       // Saturday request; Frankfurter answers with Friday's fix.
       [/\/2024-06-01\?/, { amount: 1, base: 'USD', date: '2024-05-31', rates: { EUR: 0.92149 } }],
@@ -72,32 +97,29 @@ describe('getRate', () => {
     const result = await getFrankfurterService().getRate('usd', 'usd', '2024-06-01');
 
     // The self-pair never reaches the API — USD is quoted against EUR instead.
-    expect(calls.some((url) => url.includes('symbols=EUR'))).toBe(true);
-    expect(calls.some((url) => url.includes('symbols=USD'))).toBe(false);
+    expect(requestedUrls().some((url) => url.includes('symbols=EUR'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(false);
     expect(result).toMatchObject({ rate: 1, rateDate: '2024-05-31', dateSnapped: true });
   });
 
   it('quotes an EUR identity pair against USD, since EUR against itself is the same 422', async () => {
-    const calls = stubFetch([
+    stubFetch([
       [/\/currencies$/, CURRENCIES],
       [/\/latest\?/, { amount: 1, base: 'EUR', date: '2024-06-04', rates: { USD: 1.09 } }],
     ]);
 
     const result = await getFrankfurterService().getRate('EUR', 'EUR', 'latest');
 
-    expect(calls.some((url) => url.includes('symbols=USD'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(true);
     expect(result).toMatchObject({ rate: 1, rateDate: '2024-06-04', dateSnapped: false });
   });
 
   it('fails an identity pair on a date the ECB never published for that currency', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) =>
-        /\/currencies$/.test(url)
-          ? ({ ok: true, json: async () => CURRENCIES } as unknown as Response)
-          : ({ ok: false, status: 404 } as unknown as Response),
-      ),
-    );
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: Response.json(CURRENCIES) },
+      { match: () => true, respond: () => new Response(null, { status: 404 }) },
+    ]);
+    http.install();
 
     await expect(getFrankfurterService().getRate('USD', 'USD', '1999-01-01')).rejects.toMatchObject(
       { data: { reason: 'upstream_no_data' } },
@@ -107,7 +129,7 @@ describe('getRate', () => {
 
 describe('getTimeSeries', () => {
   beforeEach(() => resetFrankfurterService());
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(restoreFetch);
 
   it('drops the prior business day Frankfurter snapped to when the range opens on a weekend', async () => {
     stubFetch([
@@ -169,7 +191,7 @@ describe('getTimeSeries', () => {
   });
 
   it('answers an identity pair with 1 on the days a proxy quote proves were published', async () => {
-    const calls = stubFetch([
+    stubFetch([
       [/\/currencies$/, CURRENCIES],
       [
         /2024-06-03\.\.2024-06-05/,
@@ -195,8 +217,8 @@ describe('getTimeSeries', () => {
     );
 
     // The self-pair never reaches the API — USD is quoted against EUR instead.
-    expect(calls.some((url) => url.includes('symbols=EUR'))).toBe(true);
-    expect(calls.some((url) => url.includes('symbols=USD'))).toBe(false);
+    expect(requestedUrls().some((url) => url.includes('symbols=EUR'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(false);
     expect(result.rows).toEqual([
       { date: '2024-06-03', rate: 1, base_currency: 'USD', quote_currency: 'USD' },
       { date: '2024-06-04', rate: 1, base_currency: 'USD', quote_currency: 'USD' },
@@ -205,7 +227,7 @@ describe('getTimeSeries', () => {
   });
 
   it('quotes an EUR identity pair against USD, since EUR against itself is the same 422', async () => {
-    const calls = stubFetch([
+    stubFetch([
       [/\/currencies$/, CURRENCIES],
       [
         /2024-06-03\.\.2024-06-03/,
@@ -226,7 +248,7 @@ describe('getTimeSeries', () => {
       '2024-06-03',
     );
 
-    expect(calls.some((url) => url.includes('symbols=USD'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(true);
     expect(result.rows).toEqual([
       { date: '2024-06-03', rate: 1, base_currency: 'EUR', quote_currency: 'EUR' },
     ]);
@@ -235,26 +257,26 @@ describe('getTimeSeries', () => {
 
 describe('getRates', () => {
   beforeEach(() => resetFrankfurterService());
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(restoreFetch);
 
   const snapshot = { amount: 1, base: 'USD', date: '2024-06-04', rates: { EUR: 0.92, GBP: 0.79 } };
 
   it('strips the base from the upstream symbols and injects its identity rate', async () => {
-    const calls = stubFetch([
+    stubFetch([
       [/\/currencies$/, CURRENCIES],
       [/\/latest\?/, snapshot],
     ]);
 
     const result = await getFrankfurterService().getRates('USD', 'latest', ['USD', 'EUR', 'GBP']);
 
-    const dataCall = calls.find((url) => url.includes('/latest?')) ?? '';
+    const dataCall = requestedUrls().find((url) => url.includes('/latest?')) ?? '';
     expect(decodeURIComponent(dataCall)).toContain('symbols=EUR,GBP');
     expect(decodeURIComponent(dataCall)).not.toContain('USD,');
     expect(result.rates).toEqual({ EUR: 0.92, GBP: 0.79, USD: 1 });
   });
 
   it('returns just the identity rate when the base is the only symbol requested', async () => {
-    const calls = stubFetch([
+    stubFetch([
       [/\/currencies$/, CURRENCIES],
       [/\/latest\?/, snapshot],
     ]);
@@ -262,7 +284,7 @@ describe('getRates', () => {
     const result = await getFrankfurterService().getRates('usd', 'latest', ['usd']);
 
     // Nothing is left to filter on, so the unfiltered snapshot supplies the date.
-    const dataCall = calls.find((url) => url.includes('/latest?')) ?? '';
+    const dataCall = requestedUrls().find((url) => url.includes('/latest?')) ?? '';
     expect(dataCall).not.toContain('symbols=');
     expect(result.rates).toEqual({ USD: 1 });
     expect(result.date).toBe('2024-06-04');

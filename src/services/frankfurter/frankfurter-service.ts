@@ -3,6 +3,7 @@
  * @module services/frankfurter/frankfurter-service
  */
 
+import { config } from '@cyanheads/mcp-ts-core/config';
 import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
@@ -65,10 +66,17 @@ export function resetFrankfurterService(): void {
 
 class FrankfurterService {
   private readonly baseUrl: string;
+  /**
+   * Polite identifier sent on every Frankfurter request. The version comes from the
+   * framework's resolved config — sourced from package.json — so it cannot drift from
+   * the released version the way a hardcoded string does.
+   */
+  private readonly userAgent: string;
   private currencyCache?: { codes: Set<string>; fetchedAt: number; list: Currency[] };
 
   constructor() {
     this.baseUrl = getServerConfig().frankfurterBaseUrl;
+    this.userAgent = `exchange-rates-mcp-server/${config.mcpServerVersion}`;
   }
 
   // ── Currencies ──────────────────────────────────────────────────────────────
@@ -273,7 +281,7 @@ class FrankfurterService {
           response = await fetch(url, {
             headers: {
               Accept: 'application/json',
-              'User-Agent': 'exchange-rates-mcp-server/0.1.5',
+              'User-Agent': this.userAgent,
             },
             signal: AbortSignal.timeout(10_000),
           });
