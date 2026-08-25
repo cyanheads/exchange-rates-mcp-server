@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/exchange-rates-mcp-server</h1>
   <p><b>Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP.</b>
-  <div>7 Tools • 2 Resources</div>
+  <div>7 Tools • 1 Opt-in Tool • 2 Resources</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,9 +29,9 @@
 
 ## Tools
 
-Seven tools for working with ECB FX rate data — currency lookup and disambiguation, point-in-time rates and conversions, historical time-series retrieval, and SQL analytics over the DataCanvas workspace that long time-series calls produce.
+Eight tools for working with ECB FX rate data — currency lookup and disambiguation, point-in-time rates and conversions, historical time-series retrieval, and SQL analytics over the DataCanvas workspace that long time-series calls produce. Five are advertised by default; the three `fx_dataframe_*` tools need `CANVAS_PROVIDER_TYPE=duckdb`, and the destructive one among them additionally needs `FX_ENABLE_CANVAS_DROP=true`.
 
-The two `fx_dataframe_*` tools require DataCanvas. With `CANVAS_PROVIDER_TYPE` unset (the default) they are not advertised in `tools/list` at all, so a client never sees a tool it cannot call; the HTTP landing page still lists them as disabled cards hinting `CANVAS_PROVIDER_TYPE=duckdb`, so operators can tell they exist. In that mode `fx_get_timeseries` returns every range inline:
+The three `fx_dataframe_*` tools require DataCanvas. With `CANVAS_PROVIDER_TYPE` unset (the default) they are not advertised in `tools/list` at all, so a client never sees a tool it cannot call; the HTTP landing page still lists them as disabled cards hinting `CANVAS_PROVIDER_TYPE=duckdb`, so operators can tell they exist. In that mode `fx_get_timeseries` returns every range inline:
 
 | Tool | Description |
 |:-----|:------------|
@@ -42,6 +42,7 @@ The two `fx_dataframe_*` tools require DataCanvas. With `CANVAS_PROVIDER_TYPE` u
 | `fx_get_timeseries` | Historical daily rates for a currency pair over a date range, never including a date outside it. Short ranges (≤90 days) are returned inline; when DataCanvas is enabled, long ranges spill to it with a `canvas_id` for SQL follow-up. |
 | `fx_dataframe_describe` | List DataCanvas tables and their columns from a prior `fx_get_timeseries` call. Required first step before `fx_dataframe_query`. Needs `CANVAS_PROVIDER_TYPE=duckdb`. |
 | `fx_dataframe_query` | Run a read-only SQL SELECT against a DataCanvas table produced by `fx_get_timeseries`. Supports aggregations, GROUP BY, window functions, and JOINs across multiple registered tables. Needs `CANVAS_PROVIDER_TYPE=duckdb`. |
+| `fx_dataframe_drop` | Permanently remove one staged table or view from a DataCanvas. Deletes staged analytical data only — ECB rate data is untouched and the series can be re-staged. Needs `CANVAS_PROVIDER_TYPE=duckdb` and `FX_ENABLE_CANVAS_DROP=true`; disabled otherwise. |
 
 ### `fx_list_currencies`
 
@@ -286,9 +287,11 @@ All configuration is validated at startup via Zod schemas. Environment variables
 |:---------|:------------|:--------|
 | `FRANKFURTER_BASE_URL` | Frankfurter API base URL. Override for local testing or a self-hosted instance. | `https://api.frankfurter.dev/v1` |
 | `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` spills to DataCanvas, when one is configured. | `90` |
-| `CANVAS_PROVIDER_TYPE` | Canvas engine. Set to `duckdb` to enable DataCanvas for `fx_get_timeseries` long-range spillover and to register the two `fx_dataframe_*` tools. At `none` they are skipped from `tools/list`. | `none` |
+| `FX_ENABLE_CANVAS_DROP` | Enable the destructive `fx_dataframe_drop` tool. Off by default: the tool stays listed with its enable hint but is uncallable. | `false` |
+| `CANVAS_PROVIDER_TYPE` | Canvas engine. Set to `duckdb` to enable DataCanvas for `fx_get_timeseries` long-range spillover and to register the three `fx_dataframe_*` tools. At `none` they are skipped from `tools/list`. | `none` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
+| `MCP_SESSION_MODE` | HTTP session mode: `auto`, `stateful`, or `stateless`. `.env.example` and the Dockerfile both set `stateless` — no handler here asks the client for input mid-call, so nothing needs a session to resume. | `auto` (resolves to `stateful`) |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424: `debug`, `info`, `notice`, `warning`, `error`). | `info` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |

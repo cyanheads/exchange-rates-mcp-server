@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-08-24 · ⚠️ Breaking
+
+Adds the opt-in fx_dataframe_drop tool and moves to @cyanheads/mcp-ts-core 0.12.3, whose SDK v2 wire tightening rejects an undeclared tool argument by name instead of silently stripping it.
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-07-31
 
 Production Docker image installs its own dependencies instead of inheriting the build stage's devDependencies; drops the unused native-build toolchain

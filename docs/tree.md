@@ -1,11 +1,9 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-07-31 18:03:39
+Generated on: 2026-08-25 05:38:43
 
 ```text
 exchange-rates-mcp-server/
-├── .agents/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -16,6 +14,8 @@ exchange-rates-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
@@ -24,6 +24,7 @@ exchange-rates-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -145,6 +146,7 @@ exchange-rates-mcp-server/
 │   │       └── definitions/
 │   │           ├── fx-convert-currency.tool.ts
 │   │           ├── fx-dataframe-describe.tool.ts
+│   │           ├── fx-dataframe-drop.tool.ts
 │   │           ├── fx-dataframe-query.tool.ts
 │   │           ├── fx-get-rate.tool.ts
 │   │           ├── fx-get-rates.tool.ts
@@ -170,11 +172,14 @@ exchange-rates-mcp-server/
 │   └── tools/
 │       ├── fx-convert-currency.tool.test.ts
 │       ├── fx-dataframe-describe.tool.test.ts
+│       ├── fx-dataframe-drop.tool.test.ts
 │       ├── fx-dataframe-query.tool.test.ts
 │       ├── fx-get-rate.tool.test.ts
 │       ├── fx-get-rates.tool.test.ts
 │       ├── fx-get-timeseries.tool.test.ts
-│       └── fx-list-currencies.tool.test.ts
+│       ├── fx-list-currencies.tool.test.ts
+│       ├── fx-tool-contracts.test.ts
+│       └── strict-inputs.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
