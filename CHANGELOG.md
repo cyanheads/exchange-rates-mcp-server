@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-08-24
+
+Restores the published container image: the Docker build stage compiles natively instead of under QEMU emulation, where Bun 1.4.0 aborts. No image was published for 0.3.0 — pull 0.3.1.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-08-24 · ⚠️ Breaking
 
 Adds the opt-in fx_dataframe_drop tool and moves to @cyanheads/mcp-ts-core 0.12.3, whose SDK v2 wire tightening rejects an undeclared tool argument by name instead of silently stripping it.
