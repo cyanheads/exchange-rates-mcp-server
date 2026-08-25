@@ -5,6 +5,7 @@
 
 export { fxConvertCurrency } from './fx-convert-currency.tool.js';
 export { fxDataframeDescribe } from './fx-dataframe-describe.tool.js';
+export { fxDataframeDrop } from './fx-dataframe-drop.tool.js';
 export { fxDataframeQuery } from './fx-dataframe-query.tool.js';
 export { fxGetRate } from './fx-get-rate.tool.js';
 export { fxGetRates } from './fx-get-rates.tool.js';

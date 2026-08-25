@@ -18,6 +18,10 @@ const ServerConfigSchema = z.object({
     .describe(
       'Day count above which fx_get_timeseries spills the result to DataCanvas instead of inlining.',
     ),
+  enableCanvasDrop: z
+    .stringbool()
+    .default(false)
+    .describe('Enable fx_dataframe_drop, which destructively removes a staged DataCanvas table.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
@@ -27,6 +31,7 @@ export function getServerConfig(): z.infer<typeof ServerConfigSchema> {
   _config ??= parseEnvConfig(ServerConfigSchema, {
     frankfurterBaseUrl: 'FRANKFURTER_BASE_URL',
     timeseriesCanvasThresholdDays: 'FX_TIMESERIES_CANVAS_THRESHOLD_DAYS',
+    enableCanvasDrop: 'FX_ENABLE_CANVAS_DROP',
   });
   return _config;
 }

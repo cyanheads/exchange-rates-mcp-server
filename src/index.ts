@@ -13,6 +13,7 @@ import {
 import {
   fxConvertCurrency,
   fxDataframeDescribe,
+  fxDataframeDrop,
   fxDataframeQuery,
   fxGetRate,
   fxGetRates,
@@ -45,6 +46,7 @@ await createApp({
     fxGetTimeseries,
     canvasEnabled ? fxDataframeDescribe : disabledTool(fxDataframeDescribe, canvasGate),
     canvasEnabled ? fxDataframeQuery : disabledTool(fxDataframeQuery, canvasGate),
+    canvasEnabled ? fxDataframeDrop : disabledTool(fxDataframeDrop, canvasGate),
   ],
   resources: [fxCurrenciesResource, fxRatesLatestResource],
   prompts: [],
