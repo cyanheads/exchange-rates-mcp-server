@@ -11,7 +11,7 @@ import { unsupportedCurrency } from '@/services/frankfurter/errors.js';
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { FrankfurterRateResponse } from '@/services/frankfurter/types.js';
 
-const mockGetRates = vi.fn<[], Promise<FrankfurterRateResponse>>();
+const mockGetRates = vi.fn<(...args: unknown[]) => Promise<FrankfurterRateResponse>>();
 vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
   getRates: mockGetRates,
 } as unknown as ReturnType<typeof serviceModule.getFrankfurterService>);
@@ -31,7 +31,7 @@ describe('fxRatesLatestResource', () => {
 
   it('returns latest rates snapshot for a base currency', async () => {
     const ctx = createMockContext();
-    const params = fxRatesLatestResource.params.parse({ base: 'USD' });
+    const params = fxRatesLatestResource.params!.parse({ base: 'USD' });
     const result = await fxRatesLatestResource.handler(params, ctx);
 
     expect(result.base_currency).toBe('USD');
@@ -43,7 +43,7 @@ describe('fxRatesLatestResource', () => {
 
   it('passes base currency to service', async () => {
     const ctx = createMockContext();
-    const params = fxRatesLatestResource.params.parse({ base: 'EUR' });
+    const params = fxRatesLatestResource.params!.parse({ base: 'EUR' });
     await fxRatesLatestResource.handler(params, ctx);
 
     expect(mockGetRates).toHaveBeenCalledWith('EUR', 'latest');
@@ -52,7 +52,7 @@ describe('fxRatesLatestResource', () => {
   it('throws ValidationError (-32007) for unsupported base currency', async () => {
     mockGetRates.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
     const ctx = createMockContext();
-    const params = fxRatesLatestResource.params.parse({ base: 'XYZ' });
+    const params = fxRatesLatestResource.params!.parse({ base: 'XYZ' });
 
     await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
@@ -67,13 +67,13 @@ describe('fxRatesLatestResource', () => {
   it('re-raises an upstream failure it cannot classify', async () => {
     mockGetRates.mockRejectedValue(new Error('Frankfurter API unreachable: ECONNRESET'));
     const ctx = createMockContext();
-    const params = fxRatesLatestResource.params.parse({ base: 'USD' });
+    const params = fxRatesLatestResource.params!.parse({ base: 'USD' });
 
     await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toThrow(/ECONNRESET/);
   });
 
-  it('lists available resources with example URIs', () => {
-    const listing = fxRatesLatestResource.list!();
+  it('lists available resources with example URIs', async () => {
+    const listing = await fxRatesLatestResource.list!({} as never);
     expect(listing.resources).toBeInstanceOf(Array);
     expect(listing.resources.length).toBeGreaterThan(0);
     for (const r of listing.resources) {

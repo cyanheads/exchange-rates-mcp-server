@@ -170,7 +170,7 @@ describe('fx_get_timeseries', () => {
       d.setDate(d.getDate() + i);
       return { date: d.toISOString().slice(0, 10), rate: 0.9 + i * 0.001 };
     });
-    mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2023-01-02', rows[129].date, rows));
+    mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2023-01-02', rows[129]!.date, rows));
     mockGetCanvas.mockReturnValue(undefined);
 
     const ctx = createMockContext({ errors: fxGetTimeseries.errors });
@@ -179,7 +179,7 @@ describe('fx_get_timeseries', () => {
         base_currency: 'USD',
         quote_currency: 'EUR',
         start_date: '2023-01-02',
-        end_date: rows[129].date,
+        end_date: rows[129]!.date,
       },
       ctx,
     );
@@ -318,7 +318,7 @@ describe('fx_get_timeseries', () => {
       d.setDate(d.getDate() + i);
       return { date: d.toISOString().slice(0, 10), rate: 0.9 + i * 0.001 };
     });
-    mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2023-01-02', rows[129].date, rows));
+    mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2023-01-02', rows[129]!.date, rows));
 
     const mockInstance = {
       canvasId: 'abc1234567',
@@ -345,7 +345,7 @@ describe('fx_get_timeseries', () => {
         base_currency: 'USD',
         quote_currency: 'EUR',
         start_date: '2023-01-02',
-        end_date: rows[129].date,
+        end_date: rows[129]!.date,
       },
       ctx,
     );

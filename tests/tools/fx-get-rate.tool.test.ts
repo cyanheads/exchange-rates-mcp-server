@@ -10,7 +10,7 @@ import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/erro
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
-const mockGetRate = vi.fn<[], Promise<ResolvedRate>>();
+const mockGetRate = vi.fn<(...args: unknown[]) => Promise<ResolvedRate>>();
 vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
   getRate: mockGetRate,
 } as unknown as ReturnType<typeof serviceModule.getFrankfurterService>);

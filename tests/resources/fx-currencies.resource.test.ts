@@ -25,7 +25,7 @@ describe('fxCurrenciesResource', () => {
 
   it('returns currency list with count and source', async () => {
     const ctx = createMockContext();
-    const params = fxCurrenciesResource.params.parse({});
+    const params = fxCurrenciesResource.params!.parse({});
     const result = await fxCurrenciesResource.handler(params, ctx);
 
     expect(result.currencies).toHaveLength(3);
@@ -34,8 +34,8 @@ describe('fxCurrenciesResource', () => {
     expect(result.currencies[0]).toMatchObject({ code: 'EUR', name: 'Euro' });
   });
 
-  it('lists available resources', () => {
-    const listing = fxCurrenciesResource.list!();
+  it('lists available resources', async () => {
+    const listing = await fxCurrenciesResource.list!({} as never);
     expect(listing.resources).toBeInstanceOf(Array);
     expect(listing.resources.length).toBeGreaterThan(0);
     expect(listing.resources[0]).toHaveProperty('uri', 'fx://currencies');

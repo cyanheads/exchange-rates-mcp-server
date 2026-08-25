@@ -11,7 +11,7 @@ import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/erro
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
-const mockGetRate = vi.fn<[], Promise<ResolvedRate>>();
+const mockGetRate = vi.fn<(...args: unknown[]) => Promise<ResolvedRate>>();
 vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
   getRate: mockGetRate,
 } as unknown as ReturnType<typeof serviceModule.getFrankfurterService>);
@@ -129,7 +129,7 @@ describe('fx_convert_currency', () => {
     });
 
     it('advertises the constraint in the serialized input schema', () => {
-      const schema = z.toJSONSchema(fxConvertCurrency.input) as {
+      const schema = z.toJSONSchema(fxConvertCurrency.input) as unknown as {
         properties: { amount: { exclusiveMinimum?: number } };
       };
       expect(schema.properties.amount.exclusiveMinimum).toBe(0);

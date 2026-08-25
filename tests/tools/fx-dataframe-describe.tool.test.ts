@@ -53,9 +53,9 @@ describe('fx_dataframe_describe', () => {
 
     expect(result.canvas_id).toBe('abc1234567');
     expect(result.tables).toHaveLength(1);
-    expect(result.tables[0].name).toBe('fx_usd_eur');
-    expect(result.tables[0].row_count).toBe(100);
-    expect(result.tables[0].columns[0].name).toBe('date');
+    expect(result.tables[0]!.name).toBe('fx_usd_eur');
+    expect(result.tables[0]!.row_count).toBe(100);
+    expect(result.tables[0]!.columns[0]!.name).toBe('date');
   });
 
   /** Mirrors the registry's own throw — the handler classifies on `data.reason`, not the message. */
