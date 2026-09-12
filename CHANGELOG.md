@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-09-12 · ⚠️ Breaking
+
+fx_get_timeseries pages inline results at 500 publication days and fx_dataframe_query defaults row_limit to 150 (max 10,000) — both breaking; spilled fx_get_timeseries responses name both dataframe tools, and query results escape Markdown table cells.
+
 ## [0.3.2](changelog/0.3.x/0.3.2.md) — 2026-09-12
 
 fx_get_rates gains date_snapped and openWorldHint: true; unsupported_currency errors across the rate tools and the rates-latest resource now list the accepted ECB code set.
