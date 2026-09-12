@@ -1,7 +1,7 @@
 # Developer Protocol
 
 **Server:** exchange-rates-mcp-server
-**Version:** 0.3.2
+**Version:** 0.4.0
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `0.12.8`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.0.0
@@ -246,14 +246,16 @@ src/
       fx-convert-currency.tool.ts      # Convert amount between two currencies
       fx-get-rate.tool.ts              # Exchange rate for a currency pair
       fx-get-rates.tool.ts             # All rates for a base currency snapshot
-      fx-get-timeseries.tool.ts        # Historical daily rates; spills to DataCanvas for long ranges
+      fx-get-timeseries.tool.ts        # Historical daily rates; inline pages of 500 days, spills to DataCanvas for long ranges
       fx-list-currencies.tool.ts       # All supported ISO 4217 currencies
       fx-dataframe-describe.tool.ts    # List DataCanvas tables from a prior timeseries call
-      fx-dataframe-query.tool.ts       # SQL SELECT against DataCanvas tables
+      fx-dataframe-query.tool.ts       # SQL SELECT against DataCanvas tables, bounded by row_limit
       fx-dataframe-drop.tool.ts        # Remove one staged table; opt-in via FX_ENABLE_CANVAS_DROP
     resources/definitions/
       fx-currencies.resource.ts        # fx://currencies — stable currencies reference document
       fx-rates-latest.resource.ts      # fx://rates/latest/{base} — latest rates snapshot
+  utils/
+    escape-markdown-table-cell.ts      # Escapes a value for one GFM table cell (fx_dataframe_query format())
 ```
 
 ---

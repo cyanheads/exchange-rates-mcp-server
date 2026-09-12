@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-09-12 20:51:52
+Generated on: 2026-09-12 21:37:15
 
 ```text
 exchange-rates-mcp-server/
@@ -25,6 +25,7 @@ exchange-rates-mcp-server/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
+│   ├── 0.4.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -162,6 +163,8 @@ exchange-rates-mcp-server/
 │   │       ├── errors.ts
 │   │       ├── frankfurter-service.ts
 │   │       └── types.ts
+│   ├── utils/
+│   │   └── escape-markdown-table-cell.ts
 │   └── index.ts
 ├── tests/
 │   ├── prompts/
@@ -171,18 +174,20 @@ exchange-rates-mcp-server/
 │   ├── services/
 │   │   ├── frankfurter-errors.test.ts
 │   │   └── frankfurter-service.test.ts
-│   └── tools/
-│       ├── fx-convert-currency.tool.test.ts
-│       ├── fx-dataframe-describe.tool.test.ts
-│       ├── fx-dataframe-drop.tool.test.ts
-│       ├── fx-dataframe-query.tool.test.ts
-│       ├── fx-get-rate.tool.test.ts
-│       ├── fx-get-rates.tool.test.ts
-│       ├── fx-get-timeseries.tool.test.ts
-│       ├── fx-list-currencies.tool.test.ts
-│       ├── fx-tool-annotations.test.ts
-│       ├── fx-tool-contracts.test.ts
-│       └── strict-inputs.test.ts
+│   ├── tools/
+│   │   ├── fx-convert-currency.tool.test.ts
+│   │   ├── fx-dataframe-describe.tool.test.ts
+│   │   ├── fx-dataframe-drop.tool.test.ts
+│   │   ├── fx-dataframe-query.tool.test.ts
+│   │   ├── fx-get-rate.tool.test.ts
+│   │   ├── fx-get-rates.tool.test.ts
+│   │   ├── fx-get-timeseries.tool.test.ts
+│   │   ├── fx-list-currencies.tool.test.ts
+│   │   ├── fx-tool-annotations.test.ts
+│   │   ├── fx-tool-contracts.test.ts
+│   │   └── strict-inputs.test.ts
+│   └── utils/
+│       └── escape-markdown-table-cell.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
