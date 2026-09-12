@@ -7,6 +7,16 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import type { CanvasInstance, QueryResult } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
+import { escapeMarkdownTableCell } from '@/utils/escape-markdown-table-cell.js';
+
+/**
+ * Rows returned when the caller sets no row_limit. Every returned row renders on both
+ * response surfaces (~125 B/row serialized for the staged date/rate table), so 150 rows
+ * is ~19 KB on the wire — inside the framework's 24 KB outline budget, where 200 is not.
+ */
+const DEFAULT_ROW_LIMIT = 150;
+/** DataCanvas's own materialization ceiling — raising row_limit can never exceed an unbounded query. */
+const MAX_ROW_LIMIT = 10_000;
 
 export const fxDataframeQuery = tool('fx_dataframe_query', {
   description:
@@ -34,6 +44,17 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
           'or the table_name field from fx_get_timeseries. ' +
           "Example: SELECT date, rate FROM fx_usd_eur WHERE date > '2024-01-01' ORDER BY date",
       ),
+    row_limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_ROW_LIMIT)
+      .default(DEFAULT_ROW_LIMIT)
+      .describe(
+        `Most rows to return (1–${MAX_ROW_LIMIT}, default ${DEFAULT_ROW_LIMIT}). When the query ` +
+          'produces more, truncated is true — page with ORDER BY <column> LIMIT <n> OFFSET <m> in the ' +
+          'SQL, or aggregate, rather than raising this toward the maximum.',
+      ),
   }),
   output: z.object({
     rows: z
@@ -43,19 +64,20 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
           .describe('One result row — column-name → value pairs matching the SELECT columns.'),
       )
       .describe(
-        'Result rows, capped at the canvas row limit (default 10 000). Each key is a column name from the query.',
+        `Result rows, at most row_limit (default ${DEFAULT_ROW_LIMIT}). Each key is a column name from the query.`,
       ),
     row_count: z
       .number()
       .describe(
-        'Rows returned. Equals the materialized row count; when truncated is true this is the row cap, ' +
-          'not the full result size. Narrow the SELECT (add WHERE/LIMIT or aggregate) to see all rows.',
+        'Rows returned — always the length of rows. When truncated is true this equals row_limit, ' +
+          'not the full result size.',
       ),
     truncated: z
       .boolean()
       .describe(
-        'True when the query produced more rows than the canvas row cap and the result was capped. ' +
-          'Refine the query to materialize the complete result.',
+        'True when the query produced more rows than row_limit and rows holds only the first ' +
+          'row_limit of them. Fetch the rest with ORDER BY <column> LIMIT <n> OFFSET <m> — ORDER BY is ' +
+          'required for deterministic paging — or aggregate to shrink the result.',
       ),
     canvas_id: z
       .string()
@@ -63,6 +85,16 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
         'The canvas ID used — pass to a subsequent fx_dataframe_query or fx_dataframe_describe call.',
       ),
   }),
+
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Present when truncated is true: how many rows came back and the ORDER BY … LIMIT … OFFSET ' +
+          'query shape that fetches the next page.',
+      ),
+  },
 
   errors: [
     {
@@ -114,7 +146,10 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
 
     let result: QueryResult;
     try {
-      result = await instance.query(input.query, { signal: ctx.signal });
+      result = await instance.query(input.query, {
+        rowLimit: input.row_limit,
+        signal: ctx.signal,
+      });
     } catch (err) {
       const reason = reasonOf(err);
       if (reason === 'canvas_not_found') {
@@ -149,23 +184,33 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       throw err;
     }
 
+    const truncated = result.truncated ?? false;
     ctx.log.info('Executed dataframe query', {
       canvasId: input.canvas_id,
       rowCount: result.rowCount,
-      truncated: result.truncated ?? false,
+      truncated,
     });
+
+    if (truncated) {
+      ctx.enrich.notice(
+        `The query produced more than ${input.row_limit} rows; rows holds the first ${input.row_limit}. ` +
+          `For the next page re-run it with ORDER BY <column> LIMIT ${input.row_limit} OFFSET ${input.row_limit} ` +
+          '(raise OFFSET by the limit each page). ORDER BY is required: without it DuckDB does not ' +
+          'guarantee the same row order across pages. Aggregating or filtering shrinks the result instead.',
+      );
+    }
 
     return {
       rows: result.rows,
       row_count: result.rowCount,
-      truncated: result.truncated ?? false,
+      truncated,
       canvas_id: input.canvas_id,
     };
   },
 
   format: (result) => {
     const capNote = result.truncated
-      ? '\n⚠️ *truncated: hit the canvas row cap — refine the query (WHERE/LIMIT/aggregate) to materialize the full set.*'
+      ? '\n⚠️ *truncated: yes — the query produced more rows than row_limit; only these were returned.*'
       : '\n*truncated: no*';
     if (result.rows.length === 0) {
       return [
@@ -176,20 +221,16 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       ];
     }
     const cols = Object.keys(result.rows[0] ?? {});
-    const header = `| ${cols.join(' | ')} |`;
-    const sep = `| ${cols.map(() => '---').join(' | ')} |`;
-    const rowLines = result.rows
-      .slice(0, 50)
-      .map((r) => `| ${cols.map((c) => String(r[c] ?? '')).join(' | ')} |`);
-    const shown = Math.min(result.rows.length, 50);
-    const total = result.truncated ? `${result.row_count}+ (capped)` : `${result.row_count}`;
-    const note =
-      result.row_count > shown ? `\n*Showing ${shown} of ${total} rows*` : `\n*${total} rows*`;
-    const table = [header, sep, ...rowLines].join('\n');
+    const toRow = (cells: string[]) => `| ${cells.map(escapeMarkdownTableCell).join(' | ')} |`;
+    const table = [
+      toRow(cols),
+      `| ${cols.map(() => '---').join(' | ')} |`,
+      ...result.rows.map((r) => toRow(cols.map((c) => String(r[c] ?? '')))),
+    ].join('\n');
     return [
       {
         type: 'text',
-        text: `${table}${note} · canvas \`${result.canvas_id}\`${capNote}`,
+        text: `${table}\n*${result.row_count} rows* · canvas \`${result.canvas_id}\`${capNote}`,
       },
     ];
   },
