@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.2](changelog/0.3.x/0.3.2.md) — 2026-09-12
+
+fx_get_rates gains date_snapped and openWorldHint: true; unsupported_currency errors across the rate tools and the rates-latest resource now list the accepted ECB code set.
+
 ## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-08-24
 
 Restores the published container image: the Docker build stage compiles natively instead of under QEMU emulation, where Bun 1.4.0 aborts. No image was published for 0.3.0 — pull 0.3.1.
