@@ -104,11 +104,18 @@ class FrankfurterService {
    * Reject currency codes outside the ECB set before they reach the URL.
    * Frankfurter answers an unknown base and an unknown symbol with the same
    * bodiless 404, so membership is the only way to name the offending input.
+   * The rejection lists the sorted live set it was checked against.
    */
   private async assertSupportedCurrencies(field: string, codes: string[]): Promise<void> {
-    const { codes: supported } = await this.currencies();
+    const { codes: supported, list } = await this.currencies();
     const unsupported = codes.filter((code) => !supported.has(code));
-    if (unsupported.length > 0) throw unsupportedCurrency(field, unsupported);
+    if (unsupported.length > 0) {
+      throw unsupportedCurrency(
+        field,
+        unsupported,
+        list.map((currency) => currency.code),
+      );
+    }
   }
 
   // ── Rate (point-in-time) ────────────────────────────────────────────────────

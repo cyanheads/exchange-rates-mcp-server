@@ -7,6 +7,7 @@
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createFetchMock, type FetchMockHarness } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -299,5 +300,80 @@ describe('getRates', () => {
     const result = await getFrankfurterService().getRates('USD', 'latest', ['EUR']);
 
     expect(result.rates).toEqual({ EUR: 0.92, GBP: 0.79 });
+  });
+});
+
+describe('unsupported currency rejection', () => {
+  beforeEach(() => resetFrankfurterService());
+  afterEach(restoreFetch);
+
+  /** The live set above, sorted — what every rejection lists after the rejected codes. */
+  const ACCEPTED = ['EUR', 'GBP', 'USD'];
+
+  it('lists the live accepted set after a rejected base, without reaching the rates endpoint', async () => {
+    stubFetch([[/\/currencies$/, CURRENCIES]]);
+
+    const rejection = getFrankfurterService().getRate('ars', 'USD', 'latest');
+
+    await expect(rejection).rejects.toMatchObject({
+      message: 'base_currency "ARS" is not supported by the ECB. Accepted: EUR, GBP, USD.',
+      data: {
+        accepted_codes: ACCEPTED,
+        field: 'base_currency',
+        reason: 'unsupported_currency',
+        rejected_codes: ['ARS'],
+      },
+    });
+    expect(requestedUrls().every((url) => url.endsWith('/currencies'))).toBe(true);
+  });
+
+  it('lists the accepted set once for several rejected symbols, blaming symbols alone', async () => {
+    stubFetch([[/\/currencies$/, CURRENCIES]]);
+
+    const error = await getFrankfurterService()
+      .getRates('USD', '2024-06-03', ['ars', 'EUR', 'vnd'])
+      .then(
+        () => expect.unreachable('expected getRates to reject'),
+        (e: unknown) => e as Error & { data: unknown },
+      );
+
+    expect(error.message).toBe(
+      'symbols contains codes not supported by the ECB: ARS, VND. Accepted: EUR, GBP, USD.',
+    );
+    expect(error.message.split('Accepted:')).toHaveLength(2);
+    expect(error.data).toMatchObject({
+      accepted_codes: ACCEPTED,
+      field: 'symbols',
+      rejected_codes: ['ARS', 'VND'],
+    });
+  });
+
+  it('carries the accepted set on a rejected quote in a time series', async () => {
+    stubFetch([[/\/currencies$/, CURRENCIES]]);
+
+    await expect(
+      getFrankfurterService().getTimeSeries('USD', 'TWD', '2024-06-03', '2024-06-05'),
+    ).rejects.toMatchObject({
+      message: 'quote_currency "TWD" is not supported by the ECB. Accepted: EUR, GBP, USD.',
+      data: { accepted_codes: ACCEPTED, field: 'quote_currency', rejected_codes: ['TWD'] },
+    });
+  });
+
+  it('propagates a failed currency-list fetch unchanged instead of building a rejection', async () => {
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: () => new Response('bad request', { status: 400 }) },
+    ]);
+    http.install();
+
+    const error = await getFrankfurterService()
+      .getRates('ARS', 'latest')
+      .then(
+        () => expect.unreachable('expected getRates to reject'),
+        (e: unknown) => e as { code: number; data?: { reason?: string } },
+      );
+
+    expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+    expect(error.data?.reason).not.toBe('unsupported_currency');
+    expect(requestedUrls()).toHaveLength(1);
   });
 });

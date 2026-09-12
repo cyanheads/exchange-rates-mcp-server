@@ -3,7 +3,7 @@
  * @module tests/resources/fx-rates-latest.resource.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxRatesLatestResource } from '@/mcp-server/resources/definitions/fx-rates-latest.resource.js';
@@ -49,19 +49,32 @@ describe('fxRatesLatestResource', () => {
     expect(mockGetRates).toHaveBeenCalledWith('EUR', 'latest');
   });
 
-  it('throws ValidationError (-32007) for unsupported base currency', async () => {
-    mockGetRates.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
+  it('throws ValidationError (-32007) for unsupported base currency, carrying both code lists', async () => {
+    const accepted = ['EUR', 'GBP', 'USD'];
+    mockGetRates.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ'], accepted));
     const ctx = createMockContext();
     const params = fxRatesLatestResource.params!.parse({ base: 'XYZ' });
 
-    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
+    const error = await Promise.resolve(fxRatesLatestResource.handler(params, ctx)).then(
+      () => expect.unreachable('expected the resource to reject'),
+      (e: unknown) => e as McpError,
+    );
+
+    expect(error).toBeInstanceOf(McpError);
+    expect(error).toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
-      data: { field: 'base_currency', reason: 'unsupported_currency' },
-      message: expect.stringMatching(/not supported by the ECB/),
+      data: {
+        accepted_codes: accepted,
+        base: 'XYZ',
+        field: 'base_currency',
+        reason: 'unsupported_currency',
+        rejected_codes: ['XYZ'],
+      },
     });
-    await expect(fxRatesLatestResource.handler(params, ctx)).rejects.toMatchObject({
-      message: expect.stringMatching(/fx_list_currencies/),
-    });
+    expect(error.message).toBe(
+      'base_currency "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD. ' +
+        'Call fx_list_currencies for the full currency names.',
+    );
   });
 
   it('re-raises an upstream failure it cannot classify', async () => {

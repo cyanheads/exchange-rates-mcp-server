@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { failureOf } from '@/services/frankfurter/errors.js';
+import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
@@ -17,13 +17,14 @@ export const fxGetRates = tool('fx_get_rates', {
   description:
     'Get all available exchange rates for one base currency in a single snapshot. ' +
     'Useful for bulk comparison and seeding downstream tools. ' +
-    'Returns a map of quote currency → rate plus the snapshot date. ' +
+    'Returns a map of quote currency → rate, the actual snapshot date, and whether a ' +
+    'historical date was snapped from a weekend/holiday to the prior business day. ' +
     'Optionally filter to a subset of quote currencies via symbols. ' +
     'Listing the base currency itself in symbols is accepted and returns a rate of 1 for it.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
-    openWorldHint: false,
+    openWorldHint: true,
   },
   input: z.object({
     base_currency: z
@@ -40,10 +41,12 @@ export const fxGetRates = tool('fx_get_rates', {
       ),
     symbols: z
       .array(z.string().describe('ISO 4217 currency code to include in the response.'))
+      .min(1)
       .optional()
       .describe(
         'Optional list of quote currency codes to filter the response. ' +
-          'Omit to return all ~30 supported currencies (the base is not among them). ' +
+          'When provided, must contain at least one currency code — omit the field entirely, ' +
+          'not an empty array, to return all ~30 supported currencies (the base is not among them). ' +
           'Including base_currency here is valid — it comes back with a rate of 1.',
       ),
   }),
@@ -58,6 +61,13 @@ export const fxGetRates = tool('fx_get_rates', {
     rates: z
       .record(z.string(), z.number())
       .describe('Map of quote currency code → exchange rate (units of quote per 1 base).'),
+    date_snapped: z
+      .boolean()
+      .describe(
+        'True when the API returned a different date than requested — ' +
+          'ECB silently snaps weekend/holiday requests to the prior business day. ' +
+          'Always false when date is omitted.',
+      ),
     rate_type: z
       .string()
       .describe(
@@ -133,6 +143,7 @@ export const fxGetRates = tool('fx_get_rates', {
         throw ctx.fail('unsupported_currency', (err as Error).message, {
           ...ctx.recoveryFor('unsupported_currency'),
           field: failure.field,
+          ...unsupportedCurrencyCodesOf(err),
         });
       }
       if (failure?.reason === 'upstream_no_data') {
@@ -157,6 +168,7 @@ export const fxGetRates = tool('fx_get_rates', {
       base_currency: raw.base,
       rate_date: raw.date,
       rates: raw.rates,
+      date_snapped: date !== 'latest' && raw.date !== date,
       rate_type: 'ECB reference (mid-market)',
       source: 'ECB via Frankfurter',
     };
@@ -166,12 +178,16 @@ export const fxGetRates = tool('fx_get_rates', {
     const rateLines = Object.entries(result.rates)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([code, rate]) => `**${code}**: ${rate}`);
+    const snapNote = result.date_snapped
+      ? `\n⚠️ *Requested date snapped to ${result.rate_date} (weekend/holiday — ECB publishes business days only)*`
+      : '';
     return [
       {
         type: 'text',
         text:
-          `**${result.base_currency} exchange rates** — ${result.rate_date}\n` +
-          `*${result.rate_type} · ${result.source}*\n\n` +
+          `**${result.base_currency} exchange rates** — ${result.rate_date}` +
+          snapNote +
+          `\n*${result.rate_type} · ${result.source}*\n\n` +
           rateLines.join('\n'),
       },
     ];

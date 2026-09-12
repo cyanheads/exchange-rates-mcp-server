@@ -15,6 +15,9 @@ vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
   getRate: mockGetRate,
 } as unknown as ReturnType<typeof serviceModule.getFrankfurterService>);
 
+/** A trimmed live ECB set — enough to show the accepted list rides along with a rejection. */
+const ACCEPTED = ['EUR', 'GBP', 'USD'];
+
 const baseResolvedRate: ResolvedRate = {
   baseCurrency: 'USD',
   quoteCurrency: 'EUR',
@@ -73,16 +76,33 @@ describe('fx_get_rate', () => {
     ).rejects.toMatchObject({ data: { reason: 'date_out_of_range' } });
   });
 
-  it('throws unsupported_currency naming the offending field', async () => {
-    mockGetRate.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
-    const ctx = createMockContext({ errors: fxGetRate.errors });
-    await expect(
-      fxGetRate.handler({ base_currency: 'XYZ', quote_currency: 'EUR' }, ctx),
-    ).rejects.toMatchObject({
-      data: { field: 'base_currency', reason: 'unsupported_currency' },
-      message: expect.stringContaining('XYZ'),
-    });
-  });
+  it.each([
+    ['base_currency', { base_currency: 'XYZ', quote_currency: 'EUR' }],
+    ['quote_currency', { base_currency: 'USD', quote_currency: 'XYZ' }],
+  ] as const)(
+    'throws unsupported_currency naming %s and forwarding both code lists',
+    async (field, input) => {
+      mockGetRate.mockRejectedValue(unsupportedCurrency(field, ['XYZ'], ACCEPTED));
+      const ctx = createMockContext({ errors: fxGetRate.errors });
+      await expect(fxGetRate.handler(input, ctx)).rejects.toMatchObject({
+        data: {
+          accepted_codes: ACCEPTED,
+          field,
+          reason: 'unsupported_currency',
+          recovery: { hint: expect.stringContaining('fx_list_currencies') },
+          rejected_codes: ['XYZ'],
+        },
+        message: `${field} "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD.`,
+      });
+    },
+  );
+
+  it.each(['base_currency', 'quote_currency'] as const)(
+    '%s points at fx_list_currencies for valid codes',
+    (field) => {
+      expect(fxGetRate.input.shape[field].description).toContain('fx_list_currencies');
+    },
+  );
 
   it('throws invalid_date_format for a malformed date, never unsupported_currency', async () => {
     const ctx = createMockContext({ errors: fxGetRate.errors });

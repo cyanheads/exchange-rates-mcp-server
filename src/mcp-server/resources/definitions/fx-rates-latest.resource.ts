@@ -5,7 +5,7 @@
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
-import { failureOf } from '@/services/frankfurter/errors.js';
+import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import { getFrankfurterService } from '@/services/frankfurter/frankfurter-service.js';
 
 export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
@@ -42,8 +42,13 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
       const failure = failureOf(err);
       if (failure?.reason === 'unsupported_currency') {
         throw validationError(
-          `${(err as Error).message} Call fx_list_currencies to get valid codes.`,
-          { base: params.base, field: failure.field, reason: failure.reason },
+          `${(err as Error).message} Call fx_list_currencies for the full currency names.`,
+          {
+            base: params.base,
+            field: failure.field,
+            reason: failure.reason,
+            ...unsupportedCurrencyCodesOf(err),
+          },
           { cause: err },
         );
       }

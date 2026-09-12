@@ -8,7 +8,7 @@ import { spillover } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
-import { failureOf } from '@/services/frankfurter/errors.js';
+import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
@@ -216,6 +216,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         throw ctx.fail('unsupported_currency', (err as Error).message, {
           ...ctx.recoveryFor('unsupported_currency'),
           field: failure.field,
+          ...unsupportedCurrencyCodesOf(err),
         });
       }
       if (failure?.reason === 'upstream_no_data') {

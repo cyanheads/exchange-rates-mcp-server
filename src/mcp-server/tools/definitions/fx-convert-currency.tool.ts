@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { failureOf } from '@/services/frankfurter/errors.js';
+import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
@@ -33,7 +33,8 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
     quote_currency: z
       .string()
       .describe(
-        'ISO 4217 target currency code (e.g. EUR). The amount will be expressed in this currency.',
+        'ISO 4217 target currency code (e.g. EUR). The amount will be expressed in this currency. ' +
+          'Call fx_list_currencies to get valid codes.',
       ),
     amount: z
       .number()
@@ -138,6 +139,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
         throw ctx.fail('unsupported_currency', (err as Error).message, {
           ...ctx.recoveryFor('unsupported_currency'),
           field: failure.field,
+          ...unsupportedCurrencyCodesOf(err),
         });
       }
       if (failure?.reason === 'upstream_no_data') {

@@ -219,24 +219,29 @@ describe('fx_get_timeseries', () => {
     ).rejects.toMatchObject({ data: { reason: 'invalid_range' } });
   });
 
-  it('throws unsupported_currency naming the offending field', async () => {
-    mockGetTimeSeries.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ']));
-    const ctx = createMockContext({ errors: fxGetTimeseries.errors });
-    await expect(
-      fxGetTimeseries.handler(
-        {
-          base_currency: 'XYZ',
-          quote_currency: 'EUR',
-          start_date: '2024-01-01',
-          end_date: '2024-06-01',
+  it.each([
+    ['base_currency', { base_currency: 'XYZ', quote_currency: 'EUR' }],
+    ['quote_currency', { base_currency: 'USD', quote_currency: 'XYZ' }],
+  ] as const)(
+    'throws unsupported_currency naming %s and forwarding both code lists',
+    async (field, pair) => {
+      const accepted = ['EUR', 'GBP', 'USD'];
+      mockGetTimeSeries.mockRejectedValue(unsupportedCurrency(field, ['XYZ'], accepted));
+      const ctx = createMockContext({ errors: fxGetTimeseries.errors });
+      await expect(
+        fxGetTimeseries.handler({ ...pair, start_date: '2024-01-01', end_date: '2024-06-01' }, ctx),
+      ).rejects.toMatchObject({
+        data: {
+          accepted_codes: accepted,
+          field,
+          reason: 'unsupported_currency',
+          recovery: { hint: expect.stringContaining('fx_list_currencies') },
+          rejected_codes: ['XYZ'],
         },
-        ctx,
-      ),
-    ).rejects.toMatchObject({
-      data: { field: 'base_currency', reason: 'unsupported_currency' },
-      message: expect.stringContaining('XYZ'),
-    });
-  });
+        message: `${field} "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD.`,
+      });
+    },
+  );
 
   it('throws invalid_date_format for a malformed start_date, never invalid_range', async () => {
     const ctx = createMockContext({ errors: fxGetTimeseries.errors });

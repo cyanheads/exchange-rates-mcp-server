@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -36,7 +36,7 @@ The three `fx_dataframe_*` tools require DataCanvas. With `CANVAS_PROVIDER_TYPE`
 | Tool | Description |
 |:-----|:------------|
 | `fx_list_currencies` | List all ~30 ECB-supported ISO 4217 currencies with full names. Use before converting to disambiguate "dollars" (USD vs AUD vs CAD vs HKD vs SGD). |
-| `fx_get_rates` | Snapshot of all available rates for a base currency at latest or a historical date. Optional `symbols` filter for smaller responses; listing the base itself returns a rate of 1 for it. |
+| `fx_get_rates` | Snapshot of all available rates for a base currency at latest or a historical date. Surfaces `date_snapped` when a weekend/holiday request returns the prior business-day snapshot. Optional `symbols` filter for smaller responses; listing the base itself returns a rate of 1 for it. |
 | `fx_get_rate` | Exchange rate for a single currency pair at latest or a historical date. Surfaces `date_snapped` when a weekend/holiday request returns the prior business-day rate. |
 | `fx_convert_currency` | Convert an amount between any two currencies at latest or a historical rate. Cross-rates are triangulated through EUR. Returns converted amount, rate used, rate date, and whether the date was snapped. |
 | `fx_get_timeseries` | Historical daily rates for a currency pair over a date range, never including a date outside it. Short ranges (≤90 days) are returned inline; when DataCanvas is enabled, long ranges spill to it with a `canvas_id` for SQL follow-up. |
@@ -57,8 +57,8 @@ Enumerate all supported currencies before converting or querying.
 
 Full rates snapshot for a base currency in one call.
 
-- Returns all available quote currencies at a given date (default: latest)
-- Optional `symbols` parameter narrows the response to specific quote currencies
+- Returns all available quote currencies at a given date (default: latest), the actual `rate_date`, and `date_snapped: true` when the API silently moved a weekend/holiday request to the prior business day — always `false` when `date` is omitted
+- Optional `symbols` parameter narrows the response to specific quote currencies; when sent it must name at least one code — omit it to get every currency
 - Naming the base currency in `symbols` is valid — it is answered locally with a rate of 1 rather than sent upstream, which keeps a self-quote from failing
 - Useful for seeding bulk comparison workflows or discovering what's available
 
@@ -133,14 +133,14 @@ ECB FX–specific:
 - Keyless access via [Frankfurter](https://www.frankfurter.dev/) — a Cloudflare-fronted ECB proxy; no API keys required
 - Cross-rate triangulation: any pair works — USD → JPY is one upstream call, cross-rated through EUR on Frankfurter's side
 - Weekend/holiday date semantics: `date_snapped` flag surfaces when the API returns a different date than requested
-- ECB data covers ~30 major currencies from 1999-01-04 to present; `fx_list_currencies` always reflects the live set
+- ECB data covers ~30 major currencies from 1999-01-04 to present; `fx_list_currencies` always reflects the live set, and an `unsupported_currency` rejection lists that live set inline so a caller can correct the code without a second call
 - Identity pairs never surface an upstream rejection: `fx_get_rate`, `fx_get_rates`, and `fx_get_timeseries` all return a rate of 1 for a currency against itself, dated to the days the ECB actually published for that currency rather than to the calendar dates requested
 - DataCanvas integration: when enabled, `fx_get_timeseries` spills long ranges to DuckDB for aggregations and trend analysis
 - Rate provenance on every response: `rate_type: "ECB reference (mid-market)"` and `source: "ECB via Frankfurter"` — explicitly mid-market, not tradeable bid/ask
 
 Agent-friendly output:
 
-- Rate provenance on every response — `rate_type`, `source`, `rate_date`, and `date_snapped` so agents can reason about trust and freshness
+- Rate provenance on every snapshot, rate, and conversion response — `rate_type`, `source`, `rate_date`, and `date_snapped` so agents can reason about trust and freshness
 - Structured error contracts — typed `reason` fields (`unsupported_currency`, `date_out_of_range`, `invalid_query`, …) let callers branch on failure type, not string parsing
 - Discriminated DataCanvas output — `spilled: true` plus `canvas_id` signal when a time-series was staged for SQL follow-up rather than returned inline
 - Success-path `notice` enrichment — explains an empty series or a long range that stayed inline, so a legitimate zero-result never reads as a failure
@@ -247,7 +247,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
 - No API key — Frankfurter is free and keyless.
 
 ### Installation

@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-08-25 05:38:43
+Generated on: 2026-09-12 20:51:52
 
 ```text
 exchange-rates-mcp-server/
@@ -116,6 +116,8 @@ exchange-rates-mcp-server/
 │   │   └── SKILL.md
 │   ├── release-and-publish/
 │   │   └── SKILL.md
+│   ├── release-pr-review/
+│   │   └── SKILL.md
 │   ├── report-issue-framework/
 │   │   └── SKILL.md
 │   ├── report-issue-local/
@@ -178,6 +180,7 @@ exchange-rates-mcp-server/
 │       ├── fx-get-rates.tool.test.ts
 │       ├── fx-get-timeseries.tool.test.ts
 │       ├── fx-list-currencies.tool.test.ts
+│       ├── fx-tool-annotations.test.ts
 │       ├── fx-tool-contracts.test.ts
 │       └── strict-inputs.test.ts
 ├── .dockerignore

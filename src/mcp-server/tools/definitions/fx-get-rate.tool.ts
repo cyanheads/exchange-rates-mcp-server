@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { failureOf } from '@/services/frankfurter/errors.js';
+import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
@@ -35,7 +35,8 @@ export const fxGetRate = tool('fx_get_rate', {
     quote_currency: z
       .string()
       .describe(
-        'ISO 4217 quote currency code (e.g. EUR). The rate is expressed as "how many quote units per 1 base unit".',
+        'ISO 4217 quote currency code (e.g. EUR). The rate is expressed as "how many quote units per 1 base unit". ' +
+          'Call fx_list_currencies to get valid codes.',
       ),
     date: z
       .string()
@@ -132,6 +133,7 @@ export const fxGetRate = tool('fx_get_rate', {
         throw ctx.fail('unsupported_currency', (err as Error).message, {
           ...ctx.recoveryFor('unsupported_currency'),
           field: failure.field,
+          ...unsupportedCurrencyCodesOf(err),
         });
       }
       if (failure?.reason === 'upstream_no_data') {

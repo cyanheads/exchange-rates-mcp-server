@@ -37,17 +37,36 @@ export function invalidDateFormat(field: string, value: string): McpError {
   });
 }
 
+/** The code lists an `unsupported_currency` failure carries on `McpError.data`. */
+export interface UnsupportedCurrencyCodes {
+  /** The live ECB reference set the request was checked against, sorted. */
+  accepted_codes: string[];
+  /** The requested codes outside that set. */
+  rejected_codes: string[];
+}
+
 /**
  * One or more currency codes outside the ECB reference set. Codes are checked
  * against the live currency list before the request, because Frankfurter's 404
- * body carries no field attribution.
+ * body carries no field attribution. The accepted set is appended once, however
+ * many codes were rejected, so the caller can correct the request without a
+ * second call.
  */
-export function unsupportedCurrency(field: string, codes: string[]): McpError {
-  const message =
-    codes.length === 1
-      ? `${field} "${codes[0]}" is not supported by the ECB.`
-      : `${field} contains codes not supported by the ECB: ${codes.join(', ')}.`;
-  return validationError(message, { codes, field, reason: 'unsupported_currency' });
+export function unsupportedCurrency(
+  field: string,
+  rejected: string[],
+  accepted: string[],
+): McpError {
+  const rejection =
+    rejected.length === 1
+      ? `${field} "${rejected[0]}" is not supported by the ECB.`
+      : `${field} contains codes not supported by the ECB: ${rejected.join(', ')}.`;
+  return validationError(`${rejection} Accepted: ${accepted.join(', ')}.`, {
+    accepted_codes: accepted,
+    field,
+    reason: 'unsupported_currency',
+    rejected_codes: rejected,
+  });
 }
 
 /**
@@ -75,4 +94,16 @@ export function failureOf(error: unknown): FrankfurterFailure | undefined {
     ...(typeof data?.field === 'string' ? { field: data.field } : {}),
     reason,
   };
+}
+
+/**
+ * Read the rejected and accepted code lists off an `unsupported_currency` failure,
+ * for a handler re-raise to forward — `ctx.fail` carries only the data it is given.
+ * Returns `undefined` for any error that carries no such lists.
+ */
+export function unsupportedCurrencyCodesOf(error: unknown): UnsupportedCurrencyCodes | undefined {
+  if (!(error instanceof McpError)) return;
+  const data = error.data as Partial<UnsupportedCurrencyCodes> | undefined;
+  if (!Array.isArray(data?.accepted_codes) || !Array.isArray(data?.rejected_codes)) return;
+  return { accepted_codes: data.accepted_codes, rejected_codes: data.rejected_codes };
 }
