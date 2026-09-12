@@ -221,6 +221,55 @@ toolContractSuite(fxGetTimeseries, {
 });
 
 /**
+ * A range past one inline page, run through the production pipeline so the page bound,
+ * its continuation, and the notice are asserted on the surfaces a client actually reads.
+ */
+describe('fx_get_timeseries paginated inline wire result', () => {
+  it('carries the same bounded page and continuation on structuredContent and content[]', async () => {
+    const rows = Array.from({ length: 620 }, (_, i) => ({
+      date: new Date(Date.UTC(2020, 0, 1 + i)).toISOString().slice(0, 10),
+      rate: 0.9,
+      base_currency: 'USD',
+      quote_currency: 'EUR',
+    }));
+    mockGetTimeSeries.mockImplementationOnce(async () => ({
+      rows,
+      startDate: rows[0]!.date,
+      endDate: rows.at(-1)!.date,
+    }));
+
+    const result = await runToolContract(fxGetTimeseries, {
+      base_currency: 'USD',
+      quote_currency: 'EUR',
+      start_date: rows[0]!.date,
+      end_date: rows.at(-1)!.date,
+    });
+    const structured = result.structuredContent as {
+      rates: Record<string, number>;
+      rate_count: number;
+      truncated: boolean;
+      next_start_date?: string;
+      notice?: string;
+      spilled: boolean;
+    };
+    const text = result.content.map((block) => (block as { text: string }).text).join('\n');
+    const renderedDates = text.match(/^\d{4}-\d{2}-\d{2}(?=: )/gm) ?? [];
+
+    expect(result.isError).toBeFalsy();
+    expect(structured.spilled).toBe(false);
+    expect(structured.rate_count).toBe(620);
+    expect(structured.truncated).toBe(true);
+    expect(structured.next_start_date).toBe(rows[500]!.date);
+    expect(Object.keys(structured.rates)).toEqual(renderedDates);
+    expect(renderedDates).toHaveLength(500);
+    expect(text).toContain(`next_start_date: ${rows[500]!.date}`);
+    expect(structured.notice).toContain(`start_date=${rows[500]!.date}`);
+    expect(text).toContain(`start_date=${rows[500]!.date}`);
+    expect(text).not.toContain('fx_dataframe');
+  });
+});
+
+/**
  * The accepted set is lost at the handler re-raise, not in the service, so it is
  * asserted on the wire envelope the production pipeline builds — both surfaces.
  */

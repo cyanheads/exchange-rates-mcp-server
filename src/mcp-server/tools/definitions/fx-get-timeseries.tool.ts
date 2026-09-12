@@ -16,6 +16,13 @@ import {
 } from '@/services/frankfurter/frankfurter-service.js';
 import type { TimeSeriesResult } from '@/services/frankfurter/types.js';
 
+/**
+ * Most publication days one inline response carries — roughly two ECB years, ~21 KB
+ * serialized across both response surfaces. Rows are date-keyed, so the continuation
+ * is the next start_date rather than an offset.
+ */
+const INLINE_PAGE_SIZE = 500;
+
 export const fxGetTimeseries = tool('fx_get_timeseries', {
   description:
     'Get historical daily exchange rates for a currency pair over a date range. ' +
@@ -23,11 +30,14 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     'outside the requested range is ever returned, so a range covering only non-publication days ' +
     'comes back with an empty rates map and a notice explaining why. ' +
     'A same-currency pair returns a rate of 1 on each publication day in the range. ' +
-    'Short ranges (≤90 days by default) are returned inline as a date→rate map. ' +
-    'When DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb) long ranges spill to it: the response ' +
-    'carries spilled=true, a canvas_id, and a table_name — call fx_dataframe_describe to inspect the ' +
-    'staged table, then fx_dataframe_query to run SQL against it. ' +
-    'Without DataCanvas long ranges stay inline (spilled=false) and the notice says so.',
+    `Inline results are returned as a date→rate map paged at ${INLINE_PAGE_SIZE} publication days: ` +
+    'rate_count is always the total for the requested range, and when a page is cut short the ' +
+    'response carries truncated=true and next_start_date — call again with start_date set to ' +
+    'next_start_date and the same end_date for the next page. ' +
+    'When DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb) long ranges (>90 days by default) spill ' +
+    'to it instead: the response carries spilled=true, a canvas_id, and a table_name — call ' +
+    'fx_dataframe_describe to inspect the staged table, then fx_dataframe_query to run SQL against it. ' +
+    'Without DataCanvas long ranges are paged inline (spilled=false) and the notice says so.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -69,25 +79,46 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     start_date: z
       .string()
       .describe(
-        'First date in the returned series. Always inside the requested range — later than the ' +
-          'requested start when that day had no ECB fix, and equal to it when the series is empty.',
+        'First publication date in the requested range, and the first key in rates. Always inside ' +
+          'the requested range — later than the requested start when that day had no ECB fix, and ' +
+          'equal to it when the series is empty.',
       ),
     end_date: z
       .string()
       .describe(
-        'Last date in the returned series. Always inside the requested range — earlier than the ' +
-          'requested end when that day had no ECB fix, and equal to it when the series is empty.',
+        'Last publication date in the requested range. Always inside the requested range — earlier ' +
+          'than the requested end when that day had no ECB fix, and equal to it when the series is ' +
+          'empty. Later than the last key in rates when truncated is true.',
       ),
     rates: z
       .record(z.string(), z.number())
       .describe(
-        'Date → rate map for the inline result. Publication days inside the requested range only. ' +
-          'Truncated to a preview when the result was spilled to canvas; empty when the range ' +
-          'contains no publication day at all.',
+        'Date → rate map in date order, publication days inside the requested range only. Holds ' +
+          `every publication day when truncated is false; otherwise the first ${INLINE_PAGE_SIZE} of an ` +
+          'inline page (continue with next_start_date) or the preview of a spilled series (the full ' +
+          'series is on the canvas). Empty when the range contains no publication day at all.',
       ),
     rate_count: z
       .number()
-      .describe('Total number of data points (publication days) inside the requested range.'),
+      .describe(
+        'Total publication days in the requested range (the start_date through end_date passed on ' +
+          'this call) — not the number of entries in rates, which is smaller when truncated is true. ' +
+          'On a continuation call it counts the days from that start_date onward.',
+      ),
+    truncated: z
+      .boolean()
+      .describe(
+        'True when rates holds only part of the series: an inline page (next_start_date continues ' +
+          'it) or a spilled preview (spilled is true). False when rates holds every publication day ' +
+          'in the requested range.',
+      ),
+    next_start_date: z
+      .string()
+      .optional()
+      .describe(
+        'Present only when an inline page was cut short: the first publication date not in rates. ' +
+          'Pass it as start_date with the same end_date to get the next page. Absent on the final page.',
+      ),
     rate_type: z
       .string()
       .describe(
@@ -102,11 +133,17 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     canvas_id: z
       .string()
       .optional()
-      .describe('Canvas ID — present when spilled is true. Pass to fx_dataframe_query.'),
+      .describe(
+        'Canvas ID — present when spilled is true. Pass to fx_dataframe_describe to inspect the ' +
+          'staged table, then to fx_dataframe_query to run SQL.',
+      ),
     table_name: z
       .string()
       .optional()
-      .describe('Canvas table name — present when spilled is true. Use in fx_dataframe_query SQL.'),
+      .describe(
+        'Canvas table name — present when spilled is true. Use it as the FROM target in ' +
+          'fx_dataframe_query SQL; fx_dataframe_describe lists its columns.',
+      ),
   }),
 
   enrichment: {
@@ -114,8 +151,10 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .string()
       .optional()
       .describe(
-        'Explains a result that would otherwise look broken — an empty series, or a long range ' +
-          'that stayed inline because DataCanvas is not configured.',
+        'Explains a result that would otherwise look broken or incomplete: an empty series (no ' +
+          'publication day in the range); an inline page cut short (the start_date to continue ' +
+          'from, plus why a long range was not staged when DataCanvas is not configured); or a ' +
+          'spilled series (the canvas and table it was staged to, and the tools that read it).',
       ),
   },
 
@@ -242,28 +281,8 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
 
     const canvas = getCanvas();
     const exceedsThreshold = dayCount > config.timeseriesCanvasThresholdDays;
-    const shouldSpill = canvas != null && exceedsThreshold;
 
-    /**
-     * An empty series and a long range that never spilled both look like failures
-     * from the outside. Say which one happened and why, on both client surfaces.
-     */
-    if (rows.length === 0) {
-      ctx.enrich.notice(
-        `The ECB published no ${input.base_currency.toUpperCase()}/${input.quote_currency.toUpperCase()} rate between ` +
-          `${input.start_date} and ${input.end_date}. Reference rates are published on TARGET business days ` +
-          'only, so a range covering just a weekend or a bank holiday is legitimately empty rather than ' +
-          'broken. Widen the range — a window spanning several weekdays will contain a publication day.',
-      );
-    } else if (exceedsThreshold && canvas == null) {
-      ctx.enrich.notice(
-        `This ${dayCount}-day range is past the ${config.timeseriesCanvasThresholdDays}-day spill threshold, but ` +
-          'DataCanvas is not configured on this server, so the full series is inline and spilled is false. ' +
-          'Set CANVAS_PROVIDER_TYPE=duckdb to stage long ranges for SQL instead.',
-      );
-    }
-
-    /** Fields every branch below returns identically — only rates/count/spill differ. */
+    /** Fields every branch below returns identically — only rates/count/paging/spill differ. */
     const envelope = {
       base_currency: input.base_currency.toUpperCase(),
       quote_currency: input.quote_currency.toUpperCase(),
@@ -273,63 +292,94 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       source: 'ECB via Frankfurter',
     };
 
-    // Inline path — short range, or long range with no canvas to spill to
-    if (!shouldSpill) {
-      const rateMap: Record<string, number> = {};
-      for (const row of rows) rateMap[row.date] = row.rate;
-      return { ...envelope, rates: rateMap, rate_count: rows.length, spilled: false };
+    if (canvas != null && exceedsThreshold) {
+      const instance = await canvas.acquire(input.canvas_id, ctx);
+      const tableName = `fx_${input.base_currency.toLowerCase()}_${input.quote_currency.toLowerCase()}`;
+
+      const spillResult = await spillover({
+        canvas: instance,
+        source: rows,
+        tableName,
+        previewChars: 40_000, // ~10k tokens preview
+        signal: ctx.signal,
+      });
+
+      ctx.log.info('Spilled to canvas', {
+        canvasId: instance.canvasId,
+        tableName,
+        rowCount: rows.length,
+        spilled: spillResult.spilled,
+      });
+
+      if (spillResult.spilled) {
+        const { rowCount, tableName: stagedTable } = spillResult.handle;
+        ctx.enrich.notice(
+          `Staged ${rowCount} rows to table "${stagedTable}" on canvas ${instance.canvasId} — call ` +
+            'fx_dataframe_describe to inspect its columns, then fx_dataframe_query to run SQL over the ' +
+            'full series. rates holds only a preview.',
+        );
+        return {
+          ...envelope,
+          rates: Object.fromEntries(spillResult.previewRows.map((row) => [row.date, row.rate])),
+          rate_count: rowCount,
+          truncated: true,
+          spilled: true,
+          canvas_id: instance.canvasId,
+          table_name: stagedTable,
+        };
+      }
+      // Every row fit the preview budget, so nothing was staged — page it inline below.
     }
 
-    // Canvas spillover path
-    const instance = await canvas.acquire(input.canvas_id, ctx);
-    const tableName = `fx_${input.base_currency.toLowerCase()}_${input.quote_currency.toLowerCase()}`;
+    const page = rows.slice(0, INLINE_PAGE_SIZE);
+    const nextRow = rows[INLINE_PAGE_SIZE];
 
-    const spillResult = await spillover({
-      canvas: instance,
-      source: rows,
-      tableName,
-      previewChars: 40_000, // ~10k tokens preview
-      signal: ctx.signal,
-    });
+    /**
+     * An empty series, a page cut short, and a long range that never spilled all look
+     * incomplete or broken from the outside. Say which one happened, on both surfaces.
+     * The dataframe tools are unregistered without a canvas, so nothing here names them.
+     */
+    const unstaged =
+      exceedsThreshold && canvas == null
+        ? `This ${dayCount}-day range is past the ${config.timeseriesCanvasThresholdDays}-day spill threshold, but ` +
+          'DataCanvas is not configured on this server, so the series is returned inline and spilled is false. ' +
+          'Set CANVAS_PROVIDER_TYPE=duckdb to stage long ranges for SQL instead.'
+        : undefined;
 
-    ctx.log.info('Spilled to canvas', {
-      canvasId: instance.canvasId,
-      tableName,
-      rowCount: rows.length,
-      spilled: spillResult.spilled,
-    });
-
-    // Build inline rate map from preview rows for the response
-    const previewRates: Record<string, number> = {};
-    for (const row of spillResult.previewRows) {
-      const r = row as { date: string; rate: number };
-      previewRates[r.date] = r.rate;
+    if (rows.length === 0) {
+      ctx.enrich.notice(
+        `The ECB published no ${envelope.base_currency}/${envelope.quote_currency} rate between ` +
+          `${input.start_date} and ${input.end_date}. Reference rates are published on TARGET business days ` +
+          'only, so a range covering just a weekend or a bank holiday is legitimately empty rather than ' +
+          'broken. Widen the range — a window spanning several weekdays will contain a publication day.',
+      );
+    } else if (nextRow) {
+      const pageNote =
+        `rates holds the first ${page.length} of ${rows.length} publication days ` +
+        `(${page[0]?.date} to ${page.at(-1)?.date}). Call fx_get_timeseries again with ` +
+        `start_date=${nextRow.date} and end_date=${input.end_date} for the next page.`;
+      ctx.enrich.notice(unstaged ? `${pageNote} ${unstaged}` : pageNote);
+    } else if (unstaged) {
+      ctx.enrich.notice(unstaged);
     }
 
-    if (spillResult.spilled) {
-      return {
-        ...envelope,
-        rates: previewRates,
-        rate_count: spillResult.handle.rowCount,
-        spilled: true,
-        canvas_id: instance.canvasId,
-        table_name: spillResult.handle.tableName,
-      };
-    }
-
-    // Fell under budget even at canvas threshold — return inline
     return {
       ...envelope,
-      rates: previewRates,
-      rate_count: spillResult.previewRows.length,
+      rates: Object.fromEntries(page.map((row) => [row.date, row.rate])),
+      rate_count: rows.length,
+      truncated: nextRow !== undefined,
+      ...(nextRow && { next_start_date: nextRow.date }),
       spilled: false,
     };
   },
 
   format: (result) => {
+    const rateEntries = Object.entries(result.rates).sort(([a], [b]) => a.localeCompare(b));
     const lines: string[] = [
       `**${result.base_currency}/${result.quote_currency} time series** — ${result.start_date} to ${result.end_date}`,
-      `*${result.rate_count} publication-day data points · ${result.rate_type} · ${result.source} · spilled: ${result.spilled}*`,
+      `*${result.rate_count} publication-day data points in range · ${result.rate_type} · ${result.source} · spilled: ${result.spilled}*`,
+      `*${rateEntries.length} shown · truncated: ${result.truncated}` +
+        (result.next_start_date ? ` · next_start_date: ${result.next_start_date}*` : '*'),
     ];
 
     if (result.spilled) {
@@ -337,20 +387,15 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         `\n📊 **Result staged on DataCanvas** (large range)`,
         `Canvas ID: \`${result.canvas_id}\``,
         `Table: \`${result.table_name}\``,
-        `Use \`fx_dataframe_query\` with this canvas_id to run SQL. Preview (first entries below):`,
+        'Call `fx_dataframe_describe` with this canvas_id to inspect the table columns, then ' +
+          '`fx_dataframe_query` to run SQL over the full series. Preview (first entries below):',
       );
     }
 
-    const rateEntries = Object.entries(result.rates)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(0, 20);
     if (rateEntries.length > 0) {
       lines.push('');
       for (const [date, rate] of rateEntries) {
         lines.push(`${date}: ${rate}`);
-      }
-      if (Object.keys(result.rates).length > 20) {
-        lines.push(`... (${Object.keys(result.rates).length - 20} more entries)`);
       }
     }
 

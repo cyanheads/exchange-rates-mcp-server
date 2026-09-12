@@ -57,7 +57,9 @@ await createApp({
     '- Use fx_list_currencies first to disambiguate "dollars" (USD/AUD/CAD/HKD/SGD).\n' +
     '- Cross-rates (e.g. USD→JPY) are triangulated through EUR automatically.\n' +
     '- Long time-series (>90 days) spill to DataCanvas when it is enabled (CANVAS_PROVIDER_TYPE=duckdb);\n' +
-    '  use fx_dataframe_query for SQL. Without it, long ranges return inline and the dataframe tools are not listed.',
+    '  call fx_dataframe_describe for the staged columns, then fx_dataframe_query for SQL.\n' +
+    '  Without it, long ranges return inline in pages of 500 publication days (continue from next_start_date)\n' +
+    '  and the dataframe tools are not listed.',
 
   setup(core) {
     setCanvas(core.canvas);
