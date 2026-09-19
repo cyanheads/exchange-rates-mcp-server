@@ -4,6 +4,7 @@
  */
 
 import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
+import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
@@ -22,12 +23,10 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
     openWorldHint: false,
   },
   input: z.object({
-    canvas_id: z
-      .string()
-      .describe(
-        'Canvas ID returned by fx_get_timeseries. ' +
-          'Re-run fx_get_timeseries to obtain a fresh canvas_id if this one has expired.',
-      ),
+    canvas_id: CanvasIdSchema.describe(
+      'Canvas ID returned by fx_get_timeseries. ' +
+        'Re-run fx_get_timeseries to obtain a fresh canvas_id if this one has expired.',
+    ),
     table_name: z
       .string()
       .describe('Exact table or view name as returned by fx_dataframe_describe.'),

@@ -38,6 +38,15 @@ const canvasGate = {
 await createApp({
   name: 'exchange-rates-mcp-server',
   title: 'exchange-rates-mcp-server',
+
+  /**
+   * No handler here asks the caller for input mid-call, so nothing needs a session
+   * to resume. Declared in source rather than left to `.env.example` and the
+   * Dockerfile alone, which a deployment can drop; `MCP_SESSION_MODE` still wins
+   * when it carries a value.
+   */
+  sessionMode: 'stateless',
+
   tools: [
     fxListCurrencies,
     fxGetRates,

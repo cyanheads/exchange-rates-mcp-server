@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { spillover } from '@cyanheads/mcp-ts-core/canvas';
+import { CanvasIdSchema, spillover } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
@@ -65,13 +65,10 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .describe(
         'ISO 8601 end date (YYYY-MM-DD). Must be >= start_date. Future dates are not supported.',
       ),
-    canvas_id: z
-      .string()
-      .optional()
-      .describe(
-        'Optional canvas ID from a prior call. Omit on the first call to start a fresh canvas; ' +
-          'pass the returned canvas_id to append tables to an existing canvas.',
-      ),
+    canvas_id: CanvasIdSchema.optional().describe(
+      'Optional canvas ID from a prior call. Omit on the first call to start a fresh canvas; ' +
+        'pass the returned canvas_id to append tables to an existing canvas.',
+    ),
   }),
   output: z.object({
     base_currency: z.string().describe('Base currency code.'),

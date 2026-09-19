@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import type { CanvasInstance } from '@cyanheads/mcp-ts-core/canvas';
+import { CanvasIdSchema, type CanvasInstance } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
 
@@ -20,12 +20,10 @@ export const fxDataframeDescribe = tool('fx_dataframe_describe', {
     openWorldHint: false,
   },
   input: z.object({
-    canvas_id: z
-      .string()
-      .describe(
-        'Canvas ID returned by fx_get_timeseries. ' +
-          'Re-run fx_get_timeseries to obtain a fresh canvas_id if this one has expired.',
-      ),
+    canvas_id: CanvasIdSchema.describe(
+      'Canvas ID returned by fx_get_timeseries. ' +
+        'Re-run fx_get_timeseries to obtain a fresh canvas_id if this one has expired.',
+    ),
   }),
   output: z.object({
     canvas_id: z.string().describe('The canvas ID echoed back — use this in fx_dataframe_query.'),

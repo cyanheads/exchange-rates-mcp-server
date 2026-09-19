@@ -157,7 +157,7 @@ class FrankfurterService {
 
     const raw = await this.fetchJson<FrankfurterRateResponse>(url);
     const quotedRate = raw.rates[quoted];
-    if (quotedRate === undefined) throw upstreamNoData(url);
+    if (quotedRate === undefined) throw upstreamNoData();
     const rate = identity ? 1 : quotedRate;
 
     const dateSnapped = date !== 'latest' && raw.date !== date;
@@ -293,10 +293,18 @@ class FrankfurterService {
             signal: AbortSignal.timeout(10_000),
           });
         } catch (err) {
+          /**
+           * `error.data` is forwarded to the client as `structuredContent.error.data`,
+           * and the request URL carries the caller's codes and dates plus whatever host
+           * `FRANKFURTER_BASE_URL` points at — so nothing thrown here puts it on the wire.
+           * The cause keeps the underlying fetch failure reachable server-side.
+           */
           throw serviceUnavailable(
             `Frankfurter API unreachable: ${(err as Error).message}`,
-            { url },
-            { cause: err as Error },
+            undefined,
+            {
+              cause: err as Error,
+            },
           );
         }
 
@@ -308,8 +316,8 @@ class FrankfurterService {
            * `httpErrorFromResponse` classify as non-transient, so a deterministic
            * input failure is surfaced immediately instead of burning retries.
            */
-          if (response.status === 404) throw upstreamNoData(url);
-          throw await httpErrorFromResponse(response, { data: { url }, service: 'Frankfurter' });
+          if (response.status === 404) throw upstreamNoData();
+          throw await httpErrorFromResponse(response, { service: 'Frankfurter' });
         }
 
         return response.json() as Promise<T>;

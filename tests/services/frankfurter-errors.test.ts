@@ -93,15 +93,24 @@ describe('frankfurter failures', () => {
   });
 
   it('reads no code lists off a failure that carries none', () => {
-    expect(unsupportedCurrencyCodesOf(upstreamNoData('/latest?base=USD'))).toBeUndefined();
+    expect(unsupportedCurrencyCodesOf(upstreamNoData())).toBeUndefined();
     expect(unsupportedCurrencyCodesOf(new Error('boom'))).toBeUndefined();
   });
 
   it('classifies an upstream gap as upstream_no_data with no field blamed', () => {
-    const error = upstreamNoData('/2000-01-04?base=ILS');
+    const error = upstreamNoData();
 
     expect(error.code).toBe(JsonRpcErrorCode.NotFound);
     expect(failureOf(error)).toEqual({ reason: 'upstream_no_data' });
+  });
+
+  /**
+   * `McpError.data` reaches the client as `structuredContent.error.data`, so the
+   * upstream request URL — which carries the caller's codes and dates alongside
+   * whatever host `FRANKFURTER_BASE_URL` names — must not be on it.
+   */
+  it('carries the reason alone, never the upstream request URL', () => {
+    expect(upstreamNoData().data).toEqual({ reason: 'upstream_no_data' });
   });
 
   it('returns undefined for errors the service did not classify', () => {

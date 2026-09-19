@@ -73,11 +73,15 @@ export function unsupportedCurrency(
  * The ECB published no rates for an otherwise well-formed request — most often a
  * date that predates the requested currency's series (ILS and BRL start well after
  * the 1999-01-04 ECB epoch).
+ *
+ * The upstream request URL is deliberately absent: `McpError.data` reaches the
+ * client as `structuredContent.error.data`, and the URL carries both the caller's
+ * inputs and the configured Frankfurter host. The calling tool re-raises with a
+ * message naming the pair and dates it asked for, which is the part a caller can act on.
  */
-export function upstreamNoData(url: string): McpError {
+export function upstreamNoData(): McpError {
   return notFound('The ECB published no rates for this request.', {
     reason: 'upstream_no_data',
-    url,
   });
 }
 

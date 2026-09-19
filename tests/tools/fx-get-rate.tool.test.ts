@@ -126,7 +126,7 @@ describe('fx_get_rate', () => {
   });
 
   it('throws upstream_no_data when the ECB published no rate for the date', async () => {
-    mockGetRate.mockRejectedValue(upstreamNoData('/2000-01-04?base=ILS&symbols=EUR'));
+    mockGetRate.mockRejectedValue(upstreamNoData());
     const ctx = createMockContext({ errors: fxGetRate.errors });
     await expect(
       fxGetRate.handler({ base_currency: 'ILS', quote_currency: 'EUR', date: '2000-01-04' }, ctx),

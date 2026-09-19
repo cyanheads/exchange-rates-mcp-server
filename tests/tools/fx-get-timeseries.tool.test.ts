@@ -287,7 +287,7 @@ describe('fx_get_timeseries', () => {
   });
 
   it('throws upstream_no_data when the ECB published no rates across the range', async () => {
-    mockGetTimeSeries.mockRejectedValue(upstreamNoData('/2000-01-04..2000-02-04?base=ILS'));
+    mockGetTimeSeries.mockRejectedValue(upstreamNoData());
     const ctx = createMockContext({ errors: fxGetTimeseries.errors });
     await expect(
       fxGetTimeseries.handler(

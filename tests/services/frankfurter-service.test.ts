@@ -10,6 +10,7 @@ import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createFetchMock, type FetchMockHarness } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getServerConfig } from '@/config/server-config.js';
 import {
   getFrankfurterService,
   isIsoDate,
@@ -300,6 +301,88 @@ describe('getRates', () => {
     const result = await getFrankfurterService().getRates('USD', 'latest', ['EUR']);
 
     expect(result.rates).toEqual({ EUR: 0.92, GBP: 0.79 });
+  });
+});
+
+/**
+ * `McpError.data` is forwarded to the client as `structuredContent.error.data`, so
+ * nothing thrown out of the HTTP boundary may carry the request URL: it holds the
+ * caller's codes and dates alongside whatever host `FRANKFURTER_BASE_URL` names.
+ * Every failure shape the boundary can produce is covered — a non-2xx through the
+ * framework's `httpErrorFromResponse`, the 404 shortcut, and a fetch that throws.
+ */
+describe('upstream failure error data', () => {
+  beforeEach(() => resetFrankfurterService());
+  afterEach(restoreFetch);
+
+  /** The base URL the failing request carries, so a leak is recognizable in any field. */
+  const BASE_URL = getServerConfig().frankfurterBaseUrl;
+
+  const rejectionOf = async (promise: Promise<unknown>) =>
+    promise.then(
+      () => expect.unreachable('expected the request to reject'),
+      (e: unknown) =>
+        e as Error & { code: number; data?: Record<string, unknown>; cause?: unknown },
+    );
+
+  /** Every error reachable through `cause`, so a retry wrapper between the two does not hide the original. */
+  const causeChain = (error: unknown): unknown[] => {
+    const chain: unknown[] = [];
+    for (let link = error; link != null; link = (link as { cause?: unknown }).cause) {
+      chain.push(link);
+    }
+    return chain;
+  };
+
+  it('keeps the request URL off a non-2xx error, naming the service instead', async () => {
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: Response.json(CURRENCIES) },
+      { match: () => true, respond: () => new Response('upstream said no', { status: 400 }) },
+    ]);
+    http.install();
+
+    const error = await rejectionOf(getFrankfurterService().getRate('USD', 'EUR', 'latest'));
+
+    expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+    expect(error.data).not.toHaveProperty('url');
+    expect(JSON.stringify(error.data)).not.toContain(BASE_URL);
+    expect(error.message).toContain('Frankfurter');
+    /** The status and body still reach the caller — it is the URL alone that is withheld. */
+    expect(error.data).toMatchObject({ status: 400, body: 'upstream said no' });
+  });
+
+  it('keeps the request URL off the 404 upstream_no_data shortcut', async () => {
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: Response.json(CURRENCIES) },
+      { match: () => true, respond: () => new Response(null, { status: 404 }) },
+    ]);
+    http.install();
+
+    const error = await rejectionOf(getFrankfurterService().getRate('USD', 'EUR', '1999-01-01'));
+
+    expect(error.data).toEqual({ reason: 'upstream_no_data' });
+  });
+
+  it('keeps the request URL off an unreachable-API error while chaining the cause', async () => {
+    const networkFailure = new TypeError('fetch failed');
+    http = createFetchMock([
+      {
+        match: () => true,
+        respond: () => {
+          throw networkFailure;
+        },
+      },
+    ]);
+    http.install();
+
+    const error = await rejectionOf(getFrankfurterService().listCurrencies());
+
+    expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(error.message).toContain('Frankfurter API unreachable');
+    expect(error.data).not.toHaveProperty('url');
+    expect(JSON.stringify(error.data)).not.toContain(BASE_URL);
+    /** Withholding the URL must not also cut the chain back to the underlying fetch failure. */
+    expect(causeChain(error)).toContain(networkFailure);
   });
 });
 
