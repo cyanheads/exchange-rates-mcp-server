@@ -27,124 +27,138 @@
 
 ---
 
-## Tools
+## Overview
 
-Eight tools for working with ECB FX rate data — currency lookup and disambiguation, point-in-time rates and conversions, historical time-series retrieval, and SQL analytics over the DataCanvas workspace that long time-series calls produce. Five are advertised by default; the three `fx_dataframe_*` tools need `CANVAS_PROVIDER_TYPE=duckdb`, and the destructive one among them additionally needs `FX_ENABLE_CANVAS_DROP=true`.
+ECB reference exchange rates via Frankfurter — a keyless proxy covering ~30 currencies back to 1999-01-04. Convert amounts, disambiguate currency codes, and pull point-in-time or historical rates from any MCP client, with SQL analytics over long time-series when DataCanvas is enabled. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
-The three `fx_dataframe_*` tools require DataCanvas. With `CANVAS_PROVIDER_TYPE` unset (the default) they are not advertised in `tools/list` at all, so a client never sees a tool it cannot call; the HTTP landing page still lists them as disabled cards hinting `CANVAS_PROVIDER_TYPE=duckdb`, so operators can tell they exist. In that mode `fx_get_timeseries` returns every range inline, paged at 500 publication days:
+### Tools
 
 | Tool | Description |
-|:-----|:------------|
-| `fx_list_currencies` | List all ~30 ECB-supported ISO 4217 currencies with full names. Use before converting to disambiguate "dollars" (USD vs AUD vs CAD vs HKD vs SGD). |
-| `fx_get_rates` | Snapshot of all available rates for a base currency at latest or a historical date. Surfaces `date_snapped` when a weekend/holiday request returns the prior business-day snapshot. Optional `symbols` filter for smaller responses; listing the base itself returns a rate of 1 for it. |
-| `fx_get_rate` | Exchange rate for a single currency pair at latest or a historical date. Surfaces `date_snapped` when a weekend/holiday request returns the prior business-day rate. |
-| `fx_convert_currency` | Convert an amount between any two currencies at latest or a historical rate. Cross-rates are triangulated through EUR. Returns converted amount, rate used, rate date, and whether the date was snapped. |
-| `fx_get_timeseries` | Historical daily rates for a currency pair over a date range, never including a date outside it. Inline results come back in pages of 500 publication days, continued with `next_start_date`; when DataCanvas is enabled, long ranges (>90 days) spill to it with a `canvas_id` for SQL follow-up instead. |
-| `fx_dataframe_describe` | List DataCanvas tables and their columns from a prior `fx_get_timeseries` call. Required first step before `fx_dataframe_query`. Needs `CANVAS_PROVIDER_TYPE=duckdb`. |
-| `fx_dataframe_query` | Run a read-only SQL SELECT against a DataCanvas table produced by `fx_get_timeseries`. Supports aggregations, GROUP BY, window functions, and JOINs across multiple registered tables. Returns at most `row_limit` rows (default 150, max 10,000). Needs `CANVAS_PROVIDER_TYPE=duckdb`. |
-| `fx_dataframe_drop` | Permanently remove one staged table or view from a DataCanvas. Deletes staged analytical data only — ECB rate data is untouched and the series can be re-staged. Needs `CANVAS_PROVIDER_TYPE=duckdb` and `FX_ENABLE_CANVAS_DROP=true`; disabled otherwise. |
+|:---|:---|
+| `fx_list_currencies` | List all ~30 ECB-supported ISO 4217 currencies with full names |
+| `fx_get_rates` | Snapshot of all rates for a base currency at latest or a historical date |
+| `fx_get_rate` | Exchange rate for a single currency pair at latest or a historical date |
+| `fx_convert_currency` | Convert an amount between two currencies at latest or a historical rate |
+| `fx_get_timeseries` | Historical daily rates for a currency pair over a date range |
+| `fx_dataframe_describe` | List DataCanvas tables and columns staged by a prior `fx_get_timeseries` call |
+| `fx_dataframe_query` | Run a read-only SQL SELECT against a staged DataCanvas table |
+| `fx_dataframe_drop` | Remove one staged DataCanvas table or view (opt-in, destructive) |
 
-### `fx_list_currencies`
+The three `fx_dataframe_*` tools need `CANVAS_PROVIDER_TYPE=duckdb` — unset, they're not advertised in `tools/list` at all, and `fx_get_timeseries` returns every range inline instead. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
 
-Enumerate all supported currencies before converting or querying.
+### Resources
 
-- Returns `[{ code, name }]` for all ~30 ECB-scoped currencies
-- ECB coverage fluctuates as currencies enter/exit scope — always call this tool to validate user-supplied codes rather than hard-coding a list
+| Resource | Description |
+|:---|:---|
+| `fx://currencies` | All supported currencies as a stable reference document |
+| `fx://rates/latest/{base}` | Latest rates snapshot for a base currency as a stable URI |
 
----
+All resource data is also reachable via tools — use `fx_list_currencies` or `fx_get_rates` for programmatic access.
 
-### `fx_get_rates`
+## Capability reference
 
-Full rates snapshot for a base currency in one call.
+### `fx_list_currencies` <sub>tool</sub>
 
-- Returns all available quote currencies at a given date (default: latest), the actual `rate_date`, and `date_snapped: true` when the API silently moved a weekend/holiday request to the prior business day — always `false` when `date` is omitted
-- Optional `symbols` parameter narrows the response to specific quote currencies; when sent it must name at least one code — omit it to get every currency
-- Naming the base currency in `symbols` is valid — it is answered locally with a rate of 1 rather than sent upstream, which keeps a self-quote from failing
-- Useful for seeding bulk comparison workflows or discovering what's available
-
----
-
-### `fx_get_rate`
-
-Point-in-time exchange rate for a single pair.
-
-- Returns the rate, the actual rate date, and `date_snapped: true` when the API silently moved a weekend/holiday request to the prior business day
-- Cross-rates (neither side EUR) are triangulated in a single API call — no extra round trip
-- A same-currency pair returns a rate of 1 without a self-quote reaching the API, but still reports the publication date the ECB actually had for that currency, so `rate_date` and `date_snapped` read the same as for any other pair
-- Use `fx_convert_currency` when you need the converted amount; use this tool when you only need the rate number
+- No input parameters
+- Returns `[{ code, name }]` for all ~30 ECB-scoped currencies, sorted alphabetically by code
+- ECB coverage shifts as currencies enter or exit scope — call this to validate a user-supplied code rather than hard-coding a list
 
 ---
 
-### `fx_convert_currency`
+### `fx_get_rates` <sub>tool</sub>
 
-Convert an amount between any two currencies.
-
-- Handles EUR ↔ any, any ↔ EUR, and cross-rate (USD → JPY via EUR) in one upstream call
-- Returns `quote_amount`, `rate`, `rate_date`, `date_snapped`, plus `rate_type` and `source` provenance on every response
-- Historical conversions supported back to 1999-01-04 (ECB launch date)
-
----
-
-### `fx_get_timeseries` + `fx_dataframe_describe` / `fx_dataframe_query`
-
-Historical rate series and DataCanvas SQL analytics.
-
-`fx_get_timeseries` returns a date-keyed series (business days only — ECB publishes once per business day):
-
-- Short ranges (≤ `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS`, default 90 days) → inline `rates` map + metadata
-- Long ranges, **when DataCanvas is enabled** → a preview inline + `canvas_id`, `table_name`, `spilled: true`, and a `notice` naming `fx_dataframe_describe` then `fx_dataframe_query` — the full series is registered as a DuckDB-backed table
-- Long ranges **without DataCanvas** → returned inline with `spilled: false`, paged (below), and a `notice` saying the threshold was crossed but no canvas was configured
-- Inline results are paged at 500 publication days. `rate_count` is always the total for the requested range; when a page is cut short the response carries `truncated: true` and `next_start_date`. Call again with `start_date` set to `next_start_date` and the same `end_date` for the next page — the final page has `truncated: false` and no `next_start_date`
-- Requesting the same currency on both sides returns a rate of 1 on each publication day in the range, taken from the ECB's real calendar rather than a synthetic Mon–Fri loop
-
-The response never carries a date outside the requested range. Frankfurter snaps a range that opens on a weekend or bank holiday back to the prior publication day; those rows are dropped, so `start_date` and `end_date` always sit inside the window you asked for. A range covering only non-publication days therefore returns an empty `rates` map with `rate_count: 0` and a `notice` explaining that the ECB published nothing in that window — distinguishable from an error.
-
-Once a `canvas_id` is in hand:
-
-1. **`fx_dataframe_describe`** — list the tables and columns on the canvas (required before `fx_dataframe_query`)
-2. **`fx_dataframe_query`** — run arbitrary SQL SELECT against the registered table; supports aggregations, GROUP BY, window functions, JOINs across tables from multiple `fx_get_timeseries` calls. Returns at most `row_limit` rows (default 150, max 10,000) on both response surfaces; past that, `truncated: true` and a `notice` give the `ORDER BY <column> LIMIT <n> OFFSET <m>` shape for the next page (`ORDER BY` is required for stable paging). Cell values are escaped in the Markdown table so pipes, angle brackets, and line breaks stay inside their cell; `structuredContent` keeps the raw values
-
-The canvas uses a session-scoped TTL. To continue working with a prior series, call `fx_get_timeseries` again with the same parameters to obtain a fresh `canvas_id`.
+- `base_currency` required; `date` optional (default latest, ECB data from 1999-01-04, no future dates); optional `symbols` array narrows the response and must name at least one code
+- Returns a `rates` map (quote code → rate), the actual `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
+- Naming the base currency in `symbols` is valid — answered locally with a rate of 1 rather than sent upstream
+- Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
 
-## Resources and prompts
+### `fx_get_rate` <sub>tool</sub>
 
-| Type | Name | Description |
-|:-----|:-----|:------------|
-| Resource | `fx://currencies` | All supported currencies as a stable reference document. Injectable context for clients that support resources. |
-| Resource | `fx://rates/latest/{base}` | Latest rates snapshot for a base currency as a stable URI. |
-
-All resource data is also reachable via tools. Use `fx_list_currencies` or `fx_get_rates` for programmatic access.
+- `base_currency`, `quote_currency` required; `date` optional (default latest, ECB data from 1999-01-04, no future dates)
+- Returns `rate`, `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
+- Cross-rates (neither side EUR) triangulate through EUR in one upstream call; a same-currency pair returns a rate of 1 without reaching the API, still dated to the real publication day
+- Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
+
+### `fx_convert_currency` <sub>tool</sub>
+
+- `base_currency`, `quote_currency`, `amount` (must be > 0) required; `date` optional (default latest, ECB data from 1999-01-04, no future dates)
+- Handles EUR↔any, any↔EUR, and cross-rate pairs (e.g. USD→JPY) in a single upstream call
+- Returns `quote_amount` (rounded to 6 decimal places), `rate`, `rate_date`, `date_snapped`, plus `rate_type` and `source` provenance
+- Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
+
+---
+
+### `fx_get_timeseries` <sub>tool</sub>
+
+- `base_currency`, `quote_currency`, `start_date`, `end_date` required (ECB data from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
+- Inline results page at 500 publication days — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
+- Ranges over `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` (default 90 days) spill to DataCanvas when configured — response carries `spilled: true`, `canvas_id`, `table_name`; without DataCanvas they're paged inline instead
+- A same-currency pair returns a rate of 1 on each real ECB publication day in range, not a synthetic Mon–Fri loop
+- An empty range (only weekends/holidays) returns `rate_count: 0` with an explanatory `notice`, distinguishable from an error
+
+---
+
+### `fx_dataframe_describe` <sub>tool</sub>
+
+- `canvas_id` required (from a prior `fx_get_timeseries` call)
+- Returns each staged table's `kind`, `row_count`, and column schema (`name`, `type`, `nullable`), plus `expires_at`
+- Required first step before `fx_dataframe_query`; needs `CANVAS_PROVIDER_TYPE=duckdb` — unregistered otherwise
+- `canvas_not_found` when the ID doesn't exist or has expired
+
+---
+
+### `fx_dataframe_query` <sub>tool</sub>
+
+- `canvas_id` and a read-only SQL `query` required; `row_limit` optional (1–10,000, default 150)
+- Supports aggregations, GROUP BY, window functions, and JOINs across tables from multiple `fx_get_timeseries` calls
+- Returns at most `row_limit` rows; `truncated: true` plus a `notice` give the `ORDER BY <column> LIMIT <n> OFFSET <m>` shape for the next page — ORDER BY is required for stable paging
+- Markdown table cells are escaped so pipes, angle brackets, and line breaks stay inside their cell; `structuredContent` keeps raw values
+- Needs `CANVAS_PROVIDER_TYPE=duckdb`; typed failures: `canvas_not_found`, `missing_table`, `invalid_query`
+
+---
+
+### `fx_dataframe_drop` <sub>tool</sub>
+
+- `canvas_id` and exact `table_name` (from `fx_dataframe_describe`) required
+- Removes one staged table or view; ECB rate data is untouched and the series can be re-staged via `fx_get_timeseries`
+- Returns `dropped: true`/`false` depending on whether the table existed
+- Disabled unless `FX_ENABLE_CANVAS_DROP=true` — listed with its enable hint but uncallable otherwise; also needs `CANVAS_PROVIDER_TYPE=duckdb`
+
+---
+
+### `fx://currencies` <sub>resource</sub>
+
+- No parameters; returns `currencies`, `count`, `source` as `application/json` — the same payload as `fx_list_currencies`
+- Listed as a single static resource
+
+---
+
+### `fx://rates/latest/{base}` <sub>resource</sub>
+
+- `base` is an ISO 4217 currency code in the URI
+- Returns `base_currency`, `rate_date`, a `rates` map, `rate_type`, and `source` for the latest ECB fix
+- Listed with four sample URIs (EUR, USD, GBP, JPY) as discovery hints
 
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
-- Declarative tool and resource definitions — single file per primitive, framework handles registration and validation
-- Unified error handling — handlers throw, framework catches, classifies, and formats
-- Typed error contracts with recovery hints — `unsupported_currency`, `date_out_of_range`, `canvas_not_found`, `missing_table`, `invalid_query`
-- Pluggable auth: `none`, `jwt`, `oauth`
-- Structured logging with optional OpenTelemetry tracing
-- STDIO and Streamable HTTP transports
-
-ECB FX–specific:
+ECB-specific:
 
 - Keyless access via [Frankfurter](https://www.frankfurter.dev/) — a Cloudflare-fronted ECB proxy; no API keys required
 - Cross-rate triangulation: any pair works — USD → JPY is one upstream call, cross-rated through EUR on Frankfurter's side
-- Weekend/holiday date semantics: `date_snapped` flag surfaces when the API returns a different date than requested
-- ECB data covers ~30 major currencies from 1999-01-04 to present; `fx_list_currencies` always reflects the live set, and an `unsupported_currency` rejection lists that live set inline so a caller can correct the code without a second call
-- Identity pairs never surface an upstream rejection: `fx_get_rate`, `fx_get_rates`, and `fx_get_timeseries` all return a rate of 1 for a currency against itself, dated to the days the ECB actually published for that currency rather than to the calendar dates requested
-- DataCanvas integration: when enabled, `fx_get_timeseries` spills long ranges to DuckDB for aggregations and trend analysis
-- Rate provenance on every response: `rate_type: "ECB reference (mid-market)"` and `source: "ECB via Frankfurter"` — explicitly mid-market, not tradeable bid/ask
+- Weekend/holiday date semantics: `date_snapped` surfaces when the API returns a different date than requested
+- Identity pairs never reach the upstream API: a currency against itself returns a rate of 1, dated to the day the ECB actually published for that currency rather than to the calendar date requested
+- Long time-series spill to DataCanvas (DuckDB) when enabled, for SQL aggregation over the full range
 
 Agent-friendly output:
 
-- Rate provenance on every snapshot, rate, and conversion response — `rate_type`, `source`, `rate_date`, and `date_snapped` so agents can reason about trust and freshness
+- Rate provenance on every response — `rate_type`, `source`, `rate_date`, and `date_snapped` so agents can reason about trust and freshness
 - Structured error contracts — typed `reason` fields (`unsupported_currency`, `date_out_of_range`, `invalid_query`, …) let callers branch on failure type, not string parsing
-- Discriminated DataCanvas output — `spilled: true` plus `canvas_id` signal when a time-series was staged for SQL follow-up rather than returned inline
 - Bounded responses — inline time-series pages continue from `next_start_date`, and SQL results cap at `row_limit`, so no call returns an unbounded payload
 - Success-path `notice` enrichment — explains an empty series, where to continue a paged series, or which tools read a staged one, so a legitimate zero-result never reads as a failure
 
@@ -294,7 +308,7 @@ All configuration is validated at startup via Zod schemas. Environment variables
 | `CANVAS_PROVIDER_TYPE` | Canvas engine. Set to `duckdb` to enable DataCanvas for `fx_get_timeseries` long-range spillover and to register the three `fx_dataframe_*` tools. At `none` they are skipped from `tools/list`. | `none` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
-| `MCP_SESSION_MODE` | HTTP session mode: `auto`, `stateful`, or `stateless`. `.env.example` and the Dockerfile both set `stateless` — no handler here asks the client for input mid-call, so nothing needs a session to resume. | `auto` (resolves to `stateful`) |
+| `MCP_SESSION_MODE` | HTTP session mode: `auto`, `stateful`, or `stateless`. The server declares `stateless` in code — no handler here asks the client for input mid-call, so nothing needs a session to resume — and setting this variable overrides that declaration. | `stateless` |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424: `debug`, `info`, `notice`, `warning`, `error`). | `info` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
@@ -365,7 +379,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 
 ## Contributing
 
-Issues and pull requests are welcome. Run checks and tests before submitting:
+Issues are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck

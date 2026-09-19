@@ -1,13 +1,26 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "exchange-rates-mcp-server",
   "version": "0.4.0",
   "description": "Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "cyanheads"
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
   "homepage": "https://github.com/cyanheads/exchange-rates-mcp-server#readme",
   "repository": "git+https://github.com/cyanheads/exchange-rates-mcp-server.git",
   "license": "Apache-2.0",
+  "keywords": [
+    "exchange-rates",
+    "currency-conversion",
+    "fx",
+    "ecb",
+    "frankfurter",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol"
+  ],
   "mcpServers": {
     "exchange-rates-mcp-server": {
       "command": "npx",
