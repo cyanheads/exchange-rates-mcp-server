@@ -149,12 +149,7 @@ describe('fx_dataframe_query', () => {
     const ctx = createMockContext({ errors: fxDataframeQuery.errors });
     await expect(
       fxDataframeQuery.handler(queryInput('SELECT * FROM fx_nonexistent'), ctx),
-    ).rejects.toMatchObject({
-      data: {
-        reason: 'missing_table',
-        recovery: { hint: expect.stringContaining('fx_dataframe_describe') },
-      },
-    });
+    ).rejects.toMatchObject({ data: { reason: 'missing_table' } });
   });
 
   it('throws invalid_query for an unclassified binder error on SELECT-shaped SQL', async () => {

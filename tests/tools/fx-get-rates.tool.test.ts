@@ -162,7 +162,6 @@ describe('fx_get_rates', () => {
         accepted_codes: ACCEPTED,
         field: 'base_currency',
         reason: 'unsupported_currency',
-        recovery: { hint: expect.stringContaining('fx_list_currencies') },
         rejected_codes: ['XYZ'],
       },
     });
@@ -212,7 +211,6 @@ describe('fx_get_rates', () => {
       data: {
         field: 'date',
         reason: 'invalid_date_format',
-        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
       },
     });
     expect(mockGetRates).not.toHaveBeenCalled();

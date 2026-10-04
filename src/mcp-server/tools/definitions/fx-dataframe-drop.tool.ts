@@ -62,7 +62,6 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
       throw ctx.fail(
         'canvas_unavailable',
         'DataCanvas is not enabled. Set CANVAS_PROVIDER_TYPE=duckdb to use fx_dataframe_drop.',
-        { ...ctx.recoveryFor('canvas_unavailable') },
       );
     }
 
@@ -75,11 +74,7 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
       const reason =
         err instanceof McpError ? (err.data as { reason?: string } | undefined)?.reason : undefined;
       if (reason === 'canvas_not_found') {
-        throw ctx.fail(
-          'canvas_not_found',
-          `Canvas "${input.canvas_id}" not found or has expired.`,
-          { ...ctx.recoveryFor('canvas_not_found') },
-        );
+        throw ctx.fail('canvas_not_found', `Canvas "${input.canvas_id}" not found or has expired.`);
       }
       throw err;
     }

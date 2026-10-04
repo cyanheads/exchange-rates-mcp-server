@@ -135,13 +135,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       instance = await canvas.acquire(input.canvas_id, ctx);
     } catch (err) {
       if (reasonOf(err) === 'canvas_not_found') {
-        throw ctx.fail(
-          'canvas_not_found',
-          `Canvas "${input.canvas_id}" not found or has expired.`,
-          {
-            ...ctx.recoveryFor('canvas_not_found'),
-          },
-        );
+        throw ctx.fail('canvas_not_found', `Canvas "${input.canvas_id}" not found or has expired.`);
       }
       throw err;
     }
@@ -155,18 +149,10 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     } catch (err) {
       const reason = reasonOf(err);
       if (reason === 'canvas_not_found') {
-        throw ctx.fail(
-          'canvas_not_found',
-          `Canvas "${input.canvas_id}" not found or has expired.`,
-          {
-            ...ctx.recoveryFor('canvas_not_found'),
-          },
-        );
+        throw ctx.fail('canvas_not_found', `Canvas "${input.canvas_id}" not found or has expired.`);
       }
       if (reason === 'missing_table') {
-        throw ctx.fail('missing_table', (err as Error).message, {
-          ...ctx.recoveryFor('missing_table'),
-        });
+        throw ctx.fail('missing_table', (err as Error).message);
       }
       /** An aborted query is a Timeout, not a rejected statement — don't blame the caller's SQL for it. */
       if (reason === 'cancelled') throw err;
@@ -179,9 +165,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
         msg.includes('does not exist') ||
         (err as { code?: string }).code === 'ValidationError'
       ) {
-        throw ctx.fail('invalid_query', `SQL query rejected: ${msg}`, {
-          ...ctx.recoveryFor('invalid_query'),
-        });
+        throw ctx.fail('invalid_query', `SQL query rejected: ${msg}`);
       }
       throw err;
     }

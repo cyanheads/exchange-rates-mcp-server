@@ -113,23 +113,18 @@ export const fxGetRates = tool('fx_get_rates', {
         throw ctx.fail(
           'invalid_date_format',
           `date "${date}" is not a valid YYYY-MM-DD calendar date.`,
-          { ...ctx.recoveryFor('invalid_date_format'), field: 'date' },
+          { field: 'date' },
         );
       }
       if (date < ECB_START_DATE) {
         throw ctx.fail(
           'date_out_of_range',
           `Date ${date} is before ECB data start ${ECB_START_DATE}.`,
-          {
-            ...ctx.recoveryFor('date_out_of_range'),
-          },
         );
       }
       const today = new Date().toISOString().slice(0, 10);
       if (date > today) {
-        throw ctx.fail('date_out_of_range', `Date ${date} is in the future.`, {
-          ...ctx.recoveryFor('date_out_of_range'),
-        });
+        throw ctx.fail('date_out_of_range', `Date ${date} is in the future.`);
       }
     }
 
@@ -141,7 +136,6 @@ export const fxGetRates = tool('fx_get_rates', {
       if (failure?.reason === 'unsupported_currency') {
         /** The service names the offending field and codes — base_currency and symbols are both reachable here. */
         throw ctx.fail('unsupported_currency', (err as Error).message, {
-          ...ctx.recoveryFor('unsupported_currency'),
           field: failure.field,
           ...unsupportedCurrencyCodesOf(err),
         });
@@ -152,7 +146,6 @@ export const fxGetRates = tool('fx_get_rates', {
           `The ECB published no ${input.base_currency} rates for ${
             date === 'latest' ? 'the latest business day' : date
           }.`,
-          { ...ctx.recoveryFor('upstream_no_data') },
         );
       }
       throw err;

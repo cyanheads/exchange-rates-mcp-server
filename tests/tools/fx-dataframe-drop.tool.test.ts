@@ -2,8 +2,9 @@
  * @fileoverview Tests for fx_dataframe_drop — the one destructive verb on the canvas
  * surface. Covers both drop outcomes on both consumption paths (`structuredContent`
  * via the handler return and `content[]` via `format()`), the two declared failure
- * reasons with their recovery hints, and the opt-in gate that keeps the tool
- * unregistered until an operator sets FX_ENABLE_CANVAS_DROP.
+ * reasons, and the opt-in gate that keeps the tool unregistered until an operator
+ * sets FX_ENABLE_CANVAS_DROP. The declared recovery hints are filled in by the
+ * framework, so fx-recovery-hints.test.ts asserts them on the wire envelope.
  * @module tests/tools/fx-dataframe-drop.tool.test
  */
 
@@ -80,7 +81,6 @@ describe('fx_dataframe_drop', () => {
       data: {
         reason: 'canvas_unavailable',
         retryable: false,
-        recovery: { hint: expect.stringContaining('CANVAS_PROVIDER_TYPE') },
       },
     });
   });
@@ -105,10 +105,7 @@ describe('fx_dataframe_drop', () => {
 
     await expect(fxDataframeDrop.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
-      data: {
-        reason: 'canvas_not_found',
-        recovery: { hint: expect.stringContaining('fx_get_timeseries') },
-      },
+      data: { reason: 'canvas_not_found' },
     });
   });
 

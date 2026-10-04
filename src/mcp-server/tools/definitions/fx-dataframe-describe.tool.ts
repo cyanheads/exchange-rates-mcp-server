@@ -75,13 +75,7 @@ export const fxDataframeDescribe = tool('fx_dataframe_describe', {
       const reason =
         err instanceof McpError ? (err.data as { reason?: string } | undefined)?.reason : undefined;
       if (reason === 'canvas_not_found') {
-        throw ctx.fail(
-          'canvas_not_found',
-          `Canvas "${input.canvas_id}" not found or has expired.`,
-          {
-            ...ctx.recoveryFor('canvas_not_found'),
-          },
-        );
+        throw ctx.fail('canvas_not_found', `Canvas "${input.canvas_id}" not found or has expired.`);
       }
       throw err;
     }

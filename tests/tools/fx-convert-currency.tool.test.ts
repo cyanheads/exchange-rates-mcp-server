@@ -92,7 +92,6 @@ describe('fx_convert_currency', () => {
           accepted_codes: ACCEPTED,
           field,
           reason: 'unsupported_currency',
-          recovery: { hint: expect.stringContaining('fx_list_currencies') },
           rejected_codes: ['XYZ'],
         },
         message: `${field} "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD.`,
@@ -118,7 +117,6 @@ describe('fx_convert_currency', () => {
       data: {
         field: 'date',
         reason: 'invalid_date_format',
-        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
       },
     });
     expect(mockGetRate).not.toHaveBeenCalled();
