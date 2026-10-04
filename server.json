@@ -37,7 +37,7 @@
         },
         {
           "name": "FX_ENABLE_CANVAS_DROP",
-          "description": "Enable fx_dataframe_drop, which permanently removes one staged table or view from a DataCanvas. Disabled by default; the tool stays listed but uncallable until set to true.",
+          "description": "Enable fx_dataframe_drop, which permanently removes one staged table or view from a DataCanvas. Disabled by default; the tool is not registered (absent from tools/list) until set to true.",
           "format": "string",
           "isRequired": false,
           "default": "false"
@@ -83,7 +83,7 @@
         },
         {
           "name": "FX_ENABLE_CANVAS_DROP",
-          "description": "Enable fx_dataframe_drop, which permanently removes one staged table or view from a DataCanvas. Disabled by default; the tool stays listed but uncallable until set to true.",
+          "description": "Enable fx_dataframe_drop, which permanently removes one staged table or view from a DataCanvas. Disabled by default; the tool is not registered (absent from tools/list) until set to true.",
           "format": "string",
           "isRequired": false,
           "default": "false"

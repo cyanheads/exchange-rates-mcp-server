@@ -100,8 +100,9 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
 
 /**
  * Deletion is the one destructive verb on the canvas surface, so it ships
- * disabled: the tool stays visible in the manifest carrying its enable hint,
- * and answers uncallable until an operator opts in.
+ * disabled: `disabledTool()` keeps it out of `tools/list`, naming it with its
+ * enable hint only in the startup log and on the HTTP landing page, until an
+ * operator opts in.
  */
 export const fxDataframeDrop = getServerConfig().enableCanvasDrop
   ? fxDataframeDropDefinition

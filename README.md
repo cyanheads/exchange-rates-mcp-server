@@ -126,7 +126,7 @@ All resource data is also reachable via tools — use `fx_list_currencies` or `f
 - `canvas_id` and exact `table_name` (from `fx_dataframe_describe`) required
 - Removes one staged table or view; ECB rate data is untouched and the series can be re-staged via `fx_get_timeseries`
 - Returns `dropped: true`/`false` depending on whether the table existed
-- Disabled unless `FX_ENABLE_CANVAS_DROP=true` — listed with its enable hint but uncallable otherwise; also needs `CANVAS_PROVIDER_TYPE=duckdb`
+- Disabled unless `FX_ENABLE_CANVAS_DROP=true` — otherwise absent from `tools/list`, named with its enable hint only in the startup log and the HTTP landing page; also needs `CANVAS_PROVIDER_TYPE=duckdb`
 
 ---
 
@@ -304,7 +304,7 @@ All configuration is validated at startup via Zod schemas. Environment variables
 |:---------|:------------|:--------|
 | `FRANKFURTER_BASE_URL` | Frankfurter API base URL. Override for local testing or a self-hosted instance. | `https://api.frankfurter.dev/v1` |
 | `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` spills to DataCanvas, when one is configured. | `90` |
-| `FX_ENABLE_CANVAS_DROP` | Enable the destructive `fx_dataframe_drop` tool. Off by default: the tool stays listed with its enable hint but is uncallable. | `false` |
+| `FX_ENABLE_CANVAS_DROP` | Enable the destructive `fx_dataframe_drop` tool. Off by default: the tool is not registered and is absent from `tools/list`. | `false` |
 | `CANVAS_PROVIDER_TYPE` | Canvas engine. Set to `duckdb` to enable DataCanvas for `fx_get_timeseries` long-range spillover and to register the three `fx_dataframe_*` tools. At `none` they are skipped from `tools/list`. | `none` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
