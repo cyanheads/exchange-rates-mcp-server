@@ -241,7 +241,6 @@ describe('fx_get_timeseries', () => {
           accepted_codes: accepted,
           field,
           reason: 'unsupported_currency',
-          recovery: { hint: expect.stringContaining('fx_list_currencies') },
           rejected_codes: ['XYZ'],
         },
         message: `${field} "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD.`,
@@ -265,7 +264,6 @@ describe('fx_get_timeseries', () => {
       data: {
         field: 'start_date',
         reason: 'invalid_date_format',
-        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
       },
     });
     expect(mockGetTimeSeries).not.toHaveBeenCalled();
@@ -385,6 +383,53 @@ describe('fx_get_timeseries', () => {
     expect(notice.indexOf('fx_dataframe_describe')).toBeGreaterThan(-1);
     expect(notice.indexOf('fx_dataframe_describe')).toBeLessThan(
       notice.indexOf('fx_dataframe_query'),
+    );
+  });
+
+  /**
+   * Inferred from the preview alone, a series whose leading rates are whole numbers
+   * (an identity pair is 1 every day) stages `rate` as BIGINT, and any later
+   * fractional rate would be truncated on append. The schema is declared instead.
+   */
+  it('stages the spilled series with an explicit schema typing rate as DOUBLE', async () => {
+    const rows = Array.from({ length: 130 }, (_, i) => ({
+      date: new Date(Date.UTC(2023, 0, 2 + i)).toISOString().slice(0, 10),
+      rate: 1,
+    }));
+    mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2023-01-02', rows[129]!.date, rows));
+    mockGetCanvas.mockReturnValue({
+      acquire: vi.fn().mockResolvedValue({
+        canvasId: 'abc1234567',
+        isNew: true,
+        expiresAt: '2026-06-05T00:00:00.000Z',
+      }),
+    } as unknown as ReturnType<typeof canvasModule.getCanvas>);
+    vi.mocked(canvasCore.spillover).mockResolvedValue({
+      spilled: true,
+      previewRows: rows.slice(0, 5),
+      handle: { tableName: 'fx_usd_eur', rowCount: 130 },
+      truncated: false,
+    } as unknown as Awaited<ReturnType<typeof canvasCore.spillover>>);
+
+    await fxGetTimeseries.handler(
+      {
+        base_currency: 'USD',
+        quote_currency: 'EUR',
+        start_date: '2023-01-02',
+        end_date: rows[129]!.date,
+      },
+      createMockContext({ errors: fxGetTimeseries.errors }),
+    );
+
+    expect(vi.mocked(canvasCore.spillover)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schema: [
+          { name: 'date', type: 'VARCHAR', nullable: false },
+          { name: 'rate', type: 'DOUBLE', nullable: false },
+          { name: 'base_currency', type: 'VARCHAR', nullable: false },
+          { name: 'quote_currency', type: 'VARCHAR', nullable: false },
+        ],
+      }),
     );
   });
 

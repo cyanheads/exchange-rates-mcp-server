@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { CanvasIdSchema, spillover } from '@cyanheads/mcp-ts-core/canvas';
+import { CanvasIdSchema, type ColumnSchema, spillover } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
@@ -22,6 +22,18 @@ import type { TimeSeriesResult } from '@/services/frankfurter/types.js';
  * is the next start_date rather than an offset.
  */
 const INLINE_PAGE_SIZE = 500;
+
+/**
+ * Column types of a staged series, matching `SeriesRow`. Declared rather than sniffed
+ * from the preview: a series whose leading rates are whole numbers (an identity pair
+ * is 1 every day) would otherwise stage `rate` as BIGINT.
+ */
+const SERIES_SCHEMA: ColumnSchema[] = [
+  { name: 'date', type: 'VARCHAR', nullable: false },
+  { name: 'rate', type: 'DOUBLE', nullable: false },
+  { name: 'base_currency', type: 'VARCHAR', nullable: false },
+  { name: 'quote_currency', type: 'VARCHAR', nullable: false },
+];
 
 export const fxGetTimeseries = tool('fx_get_timeseries', {
   description:
@@ -204,7 +216,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         throw ctx.fail(
           'invalid_date_format',
           `${field} "${value}" is not a valid YYYY-MM-DD calendar date.`,
-          { ...ctx.recoveryFor('invalid_date_format'), field },
+          { field },
         );
       }
     }
@@ -213,23 +225,15 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       throw ctx.fail(
         'date_out_of_range',
         `start_date ${input.start_date} is before ECB data start ${ECB_START_DATE}.`,
-        {
-          ...ctx.recoveryFor('date_out_of_range'),
-        },
       );
     }
     if (input.end_date > today) {
-      throw ctx.fail('date_out_of_range', `end_date ${input.end_date} is in the future.`, {
-        ...ctx.recoveryFor('date_out_of_range'),
-      });
+      throw ctx.fail('date_out_of_range', `end_date ${input.end_date} is in the future.`);
     }
     if (input.start_date > input.end_date) {
       throw ctx.fail(
         'invalid_range',
         `start_date ${input.start_date} is after end_date ${input.end_date}.`,
-        {
-          ...ctx.recoveryFor('invalid_range'),
-        },
       );
     }
 
@@ -250,7 +254,6 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       const failure = failureOf(err);
       if (failure?.reason === 'unsupported_currency') {
         throw ctx.fail('unsupported_currency', (err as Error).message, {
-          ...ctx.recoveryFor('unsupported_currency'),
           field: failure.field,
           ...unsupportedCurrencyCodesOf(err),
         });
@@ -259,7 +262,6 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         throw ctx.fail(
           'upstream_no_data',
           `The ECB published no ${input.base_currency}/${input.quote_currency} rates between ${input.start_date} and ${input.end_date}.`,
-          { ...ctx.recoveryFor('upstream_no_data') },
         );
       }
       throw err;
@@ -296,6 +298,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       const spillResult = await spillover({
         canvas: instance,
         source: rows,
+        schema: SERIES_SCHEMA,
         tableName,
         previewChars: 40_000, // ~10k tokens preview
         signal: ctx.signal,
