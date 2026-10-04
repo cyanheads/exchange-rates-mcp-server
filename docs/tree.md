@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-10-04 07:11:13
+Generated on: 2026-10-04 07:28:14
 
 ```text
 exchange-rates-mcp-server/
@@ -186,6 +186,7 @@ exchange-rates-mcp-server/
 │   │   ├── fx-dataframe-query.tool.test.ts
 │   │   ├── fx-get-rate.tool.test.ts
 │   │   ├── fx-get-rates.tool.test.ts
+│   │   ├── fx-get-timeseries.canvas.test.ts
 │   │   ├── fx-get-timeseries.tool.test.ts
 │   │   ├── fx-list-currencies.tool.test.ts
 │   │   ├── fx-recovery-hints.test.ts
