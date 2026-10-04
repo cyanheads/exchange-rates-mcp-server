@@ -6,6 +6,7 @@
 
 import { createApp, disabledTool } from '@cyanheads/mcp-ts-core';
 import { config } from '@cyanheads/mcp-ts-core/config';
+import { getServerConfig } from './config/server-config.js';
 import {
   fxCurrenciesResource,
   fxRatesLatestResource,
@@ -71,6 +72,7 @@ await createApp({
     '  and the dataframe tools are not listed.',
 
   setup(core) {
+    getServerConfig();
     setCanvas(core.canvas);
   },
 });
