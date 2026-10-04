@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-09-19 18:31:47
+Generated on: 2026-10-04 07:11:13
 
 ```text
 exchange-rates-mcp-server/
@@ -130,9 +130,11 @@ exchange-rates-mcp-server/
 │   ├── clean-mcpb.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
+│   ├── install-otel.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
+│   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
 ├── src/
@@ -186,6 +188,7 @@ exchange-rates-mcp-server/
 │   │   ├── fx-get-rates.tool.test.ts
 │   │   ├── fx-get-timeseries.tool.test.ts
 │   │   ├── fx-list-currencies.tool.test.ts
+│   │   ├── fx-recovery-hints.test.ts
 │   │   ├── fx-tool-annotations.test.ts
 │   │   ├── fx-tool-contracts.test.ts
 │   │   └── strict-inputs.test.ts

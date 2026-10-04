@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-10-04
+
+Adopts mcp-ts-core 0.13.11: tool errors carry a request ID and their declared recovery hint, multi-arch image builds stop running Bun under emulation, and a spilled fx_get_timeseries series always stages rate as DOUBLE.
+
 ## [0.4.1](changelog/0.4.x/0.4.1.md) — 2026-09-19 · 🛡️ Security
 
 Adopts mcp-ts-core 0.13.6: declares stateless session mode in source, validates canvas_id inputs against the minted shape at argument validation, and stops putting the upstream Frankfurter request URL — which carried caller currency codes/dates plus the configured API host — on client-facing error data.
