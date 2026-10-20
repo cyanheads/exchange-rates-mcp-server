@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-10-04 07:28:14
+Generated on: 2026-10-20 07:21:50
 
 ```text
 exchange-rates-mcp-server/
@@ -28,6 +28,7 @@ exchange-rates-mcp-server/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
+│   ├── 0.5.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -176,14 +177,18 @@ exchange-rates-mcp-server/
 │   │   ├── fx-currencies.resource.test.ts
 │   │   └── fx-rates-latest.resource.test.ts
 │   ├── services/
+│   │   ├── frankfurter-cancellation.test.ts
 │   │   ├── frankfurter-errors.test.ts
-│   │   └── frankfurter-service.test.ts
+│   │   ├── frankfurter-service.test.ts
+│   │   └── server-config.test.ts
 │   ├── tools/
 │   │   ├── canvas-id-input.test.ts
+│   │   ├── fx-cancellation.test.ts
 │   │   ├── fx-convert-currency.tool.test.ts
 │   │   ├── fx-dataframe-describe.tool.test.ts
 │   │   ├── fx-dataframe-drop.tool.test.ts
 │   │   ├── fx-dataframe-query.tool.test.ts
+│   │   ├── fx-drop-startup.test.ts
 │   │   ├── fx-get-rate.tool.test.ts
 │   │   ├── fx-get-rates.tool.test.ts
 │   │   ├── fx-get-timeseries.canvas.test.ts
