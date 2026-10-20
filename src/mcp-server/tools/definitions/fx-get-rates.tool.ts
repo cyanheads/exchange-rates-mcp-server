@@ -14,6 +14,7 @@ import {
 import type { FrankfurterRateResponse } from '@/services/frankfurter/types.js';
 
 export const fxGetRates = tool('fx_get_rates', {
+  inputAliases: { base: 'base_currency' },
   description:
     'Get all available exchange rates for one base currency in a single snapshot. ' +
     'Useful for bulk comparison and seeding downstream tools. ' +
@@ -130,8 +131,9 @@ export const fxGetRates = tool('fx_get_rates', {
 
     let raw: FrankfurterRateResponse;
     try {
-      raw = await service.getRates(input.base_currency, date, input.symbols);
+      raw = await service.getRates(input.base_currency, date, input.symbols, ctx.signal);
     } catch (err) {
+      ctx.signal.throwIfAborted();
       const failure = failureOf(err);
       if (failure?.reason === 'unsupported_currency') {
         /** The service names the offending field and codes — base_currency and symbols are both reachable here. */

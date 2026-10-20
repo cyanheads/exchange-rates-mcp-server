@@ -34,7 +34,7 @@ export const fxListCurrencies = tool('fx_list_currencies', {
 
   async handler(_input, ctx) {
     const service = getFrankfurterService();
-    const currencies = await service.listCurrencies();
+    const currencies = await service.listCurrencies(ctx.signal);
     ctx.log.info('Listed currencies', { count: currencies.length });
     return {
       currencies,

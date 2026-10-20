@@ -14,6 +14,7 @@ import {
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
 export const fxGetRate = tool('fx_get_rate', {
+  inputAliases: { base: 'base_currency', quote: 'quote_currency' },
   description:
     'Get the exchange rate for a currency pair on a given date (default: latest). ' +
     'Returns the rate, the actual rate date (which may differ from the requested date on ' +
@@ -121,8 +122,9 @@ export const fxGetRate = tool('fx_get_rate', {
 
     let resolved: ResolvedRate;
     try {
-      resolved = await service.getRate(input.base_currency, input.quote_currency, date);
+      resolved = await service.getRate(input.base_currency, input.quote_currency, date, ctx.signal);
     } catch (err) {
+      ctx.signal.throwIfAborted();
       const failure = failureOf(err);
       if (failure?.reason === 'unsupported_currency') {
         throw ctx.fail('unsupported_currency', (err as Error).message, {

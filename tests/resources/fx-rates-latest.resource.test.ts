@@ -46,7 +46,7 @@ describe('fxRatesLatestResource', () => {
     const params = fxRatesLatestResource.params!.parse({ base: 'EUR' });
     await fxRatesLatestResource.handler(params, ctx);
 
-    expect(mockGetRates).toHaveBeenCalledWith('EUR', 'latest');
+    expect(mockGetRates).toHaveBeenCalledWith('EUR', 'latest', undefined, ctx.signal);
   });
 
   it('throws ValidationError (-32007) for unsupported base currency, carrying both code lists', async () => {

@@ -37,8 +37,9 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
     const service = getFrankfurterService();
     let raw: Awaited<ReturnType<typeof service.getRates>>;
     try {
-      raw = await service.getRates(params.base, 'latest');
+      raw = await service.getRates(params.base, 'latest', undefined, ctx.signal);
     } catch (err) {
+      ctx.signal.throwIfAborted();
       const failure = failureOf(err);
       if (failure?.reason === 'unsupported_currency') {
         throw validationError(

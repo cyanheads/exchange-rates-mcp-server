@@ -82,16 +82,20 @@ class FrankfurterService {
   // ── Currencies ──────────────────────────────────────────────────────────────
 
   /** Fetch all supported currencies as a sorted array. Served from the day-long cache. */
-  async listCurrencies(): Promise<Currency[]> {
-    return (await this.currencies()).list;
+  async listCurrencies(signal?: AbortSignal): Promise<Currency[]> {
+    return (await this.currencies(signal)).list;
   }
 
   /** The supported currency set, fetched once per {@link CURRENCY_CACHE_TTL_MS}. */
-  private async currencies(): Promise<{ codes: Set<string>; list: Currency[] }> {
+  private async currencies(
+    signal?: AbortSignal,
+  ): Promise<{ codes: Set<string>; list: Currency[] }> {
+    signal?.throwIfAborted();
     const cached = this.currencyCache;
     if (cached && Date.now() - cached.fetchedAt <= CURRENCY_CACHE_TTL_MS) return cached;
 
-    const map = await this.fetchJson<CurrencyMap>('/currencies');
+    const map = await this.fetchJson<CurrencyMap>('/currencies', signal);
+    signal?.throwIfAborted();
     const list = Object.entries(map)
       .map(([code, name]) => ({ code, name }))
       .sort((a, b) => a.code.localeCompare(b.code));
@@ -106,8 +110,12 @@ class FrankfurterService {
    * bodiless 404, so membership is the only way to name the offending input.
    * The rejection lists the sorted live set it was checked against.
    */
-  private async assertSupportedCurrencies(field: string, codes: string[]): Promise<void> {
-    const { codes: supported, list } = await this.currencies();
+  private async assertSupportedCurrencies(
+    field: string,
+    codes: string[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const { codes: supported, list } = await this.currencies(signal);
     const unsupported = codes.filter((code) => !supported.has(code));
     if (unsupported.length > 0) {
       throw unsupportedCurrency(
@@ -139,12 +147,17 @@ class FrankfurterService {
    * @param quote - ISO 4217 quote currency code
    * @param date - ISO 8601 date string, or 'latest'
    */
-  async getRate(base: string, quote: string, date: string): Promise<ResolvedRate> {
+  async getRate(
+    base: string,
+    quote: string,
+    date: string,
+    signal?: AbortSignal,
+  ): Promise<ResolvedRate> {
     const upper_base = base.toUpperCase();
     const upper_quote = quote.toUpperCase();
     if (date !== 'latest') assertDateFormat(date, 'date');
-    await this.assertSupportedCurrencies('base_currency', [upper_base]);
-    await this.assertSupportedCurrencies('quote_currency', [upper_quote]);
+    await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
+    await this.assertSupportedCurrencies('quote_currency', [upper_quote], signal);
 
     const identity = upper_base === upper_quote;
     const quoted = identity ? proxyQuoteFor(upper_base) : upper_quote;
@@ -155,7 +168,7 @@ class FrankfurterService {
     const params = new URLSearchParams({ base: upper_base, symbols: quoted });
     const url = `${endpoint}?${params}`;
 
-    const raw = await this.fetchJson<FrankfurterRateResponse>(url);
+    const raw = await this.fetchJson<FrankfurterRateResponse>(url, signal);
     const quotedRate = raw.rates[quoted];
     if (quotedRate === undefined) throw upstreamNoData();
     const rate = identity ? 1 : quotedRate;
@@ -183,12 +196,18 @@ class FrankfurterService {
    * a request whose only symbol is the base (422 "bad currency pair"). The base
    * is therefore stripped from the upstream `symbols` and injected locally.
    */
-  async getRates(base: string, date: string, symbols?: string[]): Promise<FrankfurterRateResponse> {
+  async getRates(
+    base: string,
+    date: string,
+    symbols?: string[],
+    signal?: AbortSignal,
+  ): Promise<FrankfurterRateResponse> {
     const upper_base = base.toUpperCase();
     const upper_symbols = symbols?.map((s) => s.toUpperCase()) ?? [];
     if (date !== 'latest') assertDateFormat(date, 'date');
-    await this.assertSupportedCurrencies('base_currency', [upper_base]);
-    if (upper_symbols.length > 0) await this.assertSupportedCurrencies('symbols', upper_symbols);
+    await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
+    if (upper_symbols.length > 0)
+      await this.assertSupportedCurrencies('symbols', upper_symbols, signal);
 
     const selfQuoted = upper_symbols.includes(upper_base);
     const upstreamSymbols = upper_symbols.filter((code) => code !== upper_base);
@@ -202,7 +221,7 @@ class FrankfurterService {
      */
     if (upstreamSymbols.length > 0) params.set('symbols', upstreamSymbols.join(','));
     const url = `${endpoint}?${params}`;
-    const raw = await this.fetchJson<FrankfurterRateResponse>(url);
+    const raw = await this.fetchJson<FrankfurterRateResponse>(url, signal);
 
     if (!selfQuoted) return raw;
     return {
@@ -234,20 +253,21 @@ class FrankfurterService {
     quote: string,
     startDate: string,
     endDate: string,
+    signal?: AbortSignal,
   ): Promise<TimeSeriesResult> {
     const upper_base = base.toUpperCase();
     const upper_quote = quote.toUpperCase();
     assertDateFormat(startDate, 'start_date');
     assertDateFormat(endDate, 'end_date');
-    await this.assertSupportedCurrencies('base_currency', [upper_base]);
-    await this.assertSupportedCurrencies('quote_currency', [upper_quote]);
+    await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
+    await this.assertSupportedCurrencies('quote_currency', [upper_quote], signal);
 
     const identity = upper_base === upper_quote;
     const quoted = identity ? proxyQuoteFor(upper_base) : upper_quote;
 
     const params = new URLSearchParams({ base: upper_base, symbols: quoted });
     const url = `/${encodeURIComponent(startDate)}..${encodeURIComponent(endDate)}?${params}`;
-    const raw = await this.fetchJson<FrankfurterSeriesResponse>(url);
+    const raw = await this.fetchJson<FrankfurterSeriesResponse>(url, signal);
 
     const rows: SeriesRow[] = Object.entries(raw.rates)
       .filter(([date]) => date >= startDate && date <= endDate)
@@ -279,10 +299,12 @@ class FrankfurterService {
 
   // ── HTTP helpers ────────────────────────────────────────────────────────────
 
-  private fetchJson<T>(path: string): Promise<T> {
+  private fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     return withRetry(
-      async () => {
+      async ({ signal: attemptSignal }) => {
+        attemptSignal.throwIfAborted();
+        const requestSignal = AbortSignal.any([attemptSignal, AbortSignal.timeout(10_000)]);
         let response: Response;
         try {
           response = await fetch(url, {
@@ -290,9 +312,10 @@ class FrankfurterService {
               Accept: 'application/json',
               'User-Agent': this.userAgent,
             },
-            signal: AbortSignal.timeout(10_000),
+            signal: requestSignal,
           });
         } catch (err) {
+          signal?.throwIfAborted();
           /**
            * `error.data` is forwarded to the client as `structuredContent.error.data`,
            * and the request URL carries the caller's codes and dates plus whatever host
@@ -320,9 +343,11 @@ class FrankfurterService {
           throw await httpErrorFromResponse(response, { service: 'Frankfurter' });
         }
 
-        return response.json() as Promise<T>;
+        const body = (await response.json()) as T;
+        signal?.throwIfAborted();
+        return body;
       },
-      { maxRetries: 2, baseDelayMs: 500 },
+      { maxRetries: 2, baseDelayMs: 500, ...(signal && { signal }) },
     );
   }
 }

@@ -5,7 +5,7 @@
  */
 
 import { createApp, disabledTool } from '@cyanheads/mcp-ts-core';
-import { config } from '@cyanheads/mcp-ts-core/config';
+import { config, parseConfig, resetConfig } from '@cyanheads/mcp-ts-core/config';
 import { getServerConfig } from './config/server-config.js';
 import {
   fxCurrenciesResource,
@@ -22,6 +22,11 @@ import {
   fxListCurrencies,
 } from './mcp-server/tools/definitions/index.js';
 import { setCanvas } from './services/canvas/canvas-accessor.js';
+
+parseConfig();
+// DataCanvas defaults on; set CANVAS_PROVIDER_TYPE=none to disable it.
+process.env.CANVAS_PROVIDER_TYPE ||= 'duckdb';
+resetConfig();
 
 /**
  * The dataframe tools are useless without a canvas to read — every call fails
@@ -66,10 +71,10 @@ await createApp({
     '- Rates are mid-market ECB reference rates — not tradeable bid/ask.\n' +
     '- Use fx_list_currencies first to disambiguate "dollars" (USD/AUD/CAD/HKD/SGD).\n' +
     '- Cross-rates (e.g. USD→JPY) are triangulated through EUR automatically.\n' +
-    '- Long time-series (>90 days) spill to DataCanvas when it is enabled (CANVAS_PROVIDER_TYPE=duckdb);\n' +
+    '- Long time-series (>90 days) stage on DataCanvas when they exceed its inline preview budget (DuckDB, on by default);\n' +
     '  call fx_dataframe_describe for the staged columns, then fx_dataframe_query for SQL.\n' +
-    '  Without it, long ranges return inline in pages of 500 publication days (continue from next_start_date)\n' +
-    '  and the dataframe tools are not listed.',
+    '  Where DataCanvas is off (CANVAS_PROVIDER_TYPE=none), long ranges return inline in pages of 500\n' +
+    '  publication days (continue from next_start_date) and the dataframe tools are not listed.',
 
   setup(core) {
     getServerConfig();

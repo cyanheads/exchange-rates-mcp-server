@@ -29,7 +29,7 @@ export const fxCurrenciesResource = resource('fx://currencies', {
 
   async handler(_params, ctx) {
     const service = getFrankfurterService();
-    const currencies = await service.listCurrencies();
+    const currencies = await service.listCurrencies(ctx.signal);
     ctx.log.info('Fetched currencies resource', { count: currencies.length });
     return { currencies, count: currencies.length, source: 'ECB via Frankfurter' };
   },

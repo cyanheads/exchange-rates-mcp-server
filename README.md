@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.4.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.4.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## Overview
 
-ECB reference exchange rates via Frankfurter — a keyless proxy covering ~30 currencies back to 1999-01-04. Convert amounts, disambiguate currency codes, and pull point-in-time or historical rates from any MCP client, with SQL analytics over long time-series when DataCanvas is enabled. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+ECB reference exchange rates via Frankfurter, covering ~30 currencies back to 1999. Convert amounts, disambiguate currency codes, pull point-in-time or historical rates, and run SQL over long time series. No API key required.
 
 ### Tools
 
@@ -44,7 +44,9 @@ ECB reference exchange rates via Frankfurter — a keyless proxy covering ~30 cu
 | `fx_dataframe_query` | Run a read-only SQL SELECT against a staged DataCanvas table |
 | `fx_dataframe_drop` | Remove one staged DataCanvas table or view (opt-in, destructive) |
 
-The three `fx_dataframe_*` tools need `CANVAS_PROVIDER_TYPE=duckdb` — unset, they're not advertised in `tools/list` at all, and `fx_get_timeseries` returns every range inline instead. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
+DataCanvas (DuckDB) is on by default. Set `CANVAS_PROVIDER_TYPE=none` to turn it off: the three `fx_dataframe_*` tools then drop out of `tools/list`, and `fx_get_timeseries` returns every range inline. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native binding, so it runs with DataCanvas off. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
+
+The four rate and conversion tools accept `base` as an alias of `base_currency`; pair tools also accept `quote` for `quote_currency`. Send either spelling for a field, never both. Advertised schemas use the canonical names.
 
 ### Resources
 
@@ -54,6 +56,8 @@ The three `fx_dataframe_*` tools need `CANVAS_PROVIDER_TYPE=duckdb` — unset, t
 | `fx://rates/latest/{base}` | Latest rates snapshot for a base currency as a stable URI |
 
 All resource data is also reachable via tools — use `fx_list_currencies` or `fx_get_rates` for programmatic access.
+
+Cancelling a tool call or resource read stops its upstream fetch, response-body read, and retry backoff. Uncancelled requests retain two retries and a 10-second timeout per attempt.
 
 ## Capability reference
 
@@ -78,7 +82,7 @@ All resource data is also reachable via tools — use `fx_list_currencies` or `f
 
 - `base_currency`, `quote_currency` required; `date` optional (default latest, ECB data from 1999-01-04, no future dates)
 - Returns `rate`, `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
-- Cross-rates (neither side EUR) triangulate through EUR in one upstream call; a same-currency pair returns a rate of 1 without reaching the API, still dated to the real publication day
+- Cross-rates (neither side EUR) triangulate through EUR in one upstream rate call; a same-currency pair returns 1, with its publication date obtained from an upstream proxy quote
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
@@ -96,9 +100,10 @@ All resource data is also reachable via tools — use `fx_list_currencies` or `f
 
 - `base_currency`, `quote_currency`, `start_date`, `end_date` required (ECB data from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
 - Inline results page at 500 publication days — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
-- Ranges over `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` (default 90 days) spill to DataCanvas when configured — response carries `spilled: true`, `canvas_id`, `table_name`; without DataCanvas they're paged inline instead
+- Ranges over `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` (default 90 days) are considered for DataCanvas staging. Series over the 40,000-character preview budget return `spilled: true`, `canvas_id`, and `table_name`; smaller series and deployments with `CANVAS_PROVIDER_TYPE=none` page inline
 - A same-currency pair returns a rate of 1 on each real ECB publication day in range, not a synthetic Mon–Fri loop
 - An empty range (only weekends/holidays) returns `rate_count: 0` with an explanatory `notice`, distinguishable from an error
+- Long ranges that fit the inline preview release their newly acquired canvas; failed or cancelled staging does too. A supplied canvas remains available.
 
 ---
 
@@ -106,7 +111,7 @@ All resource data is also reachable via tools — use `fx_list_currencies` or `f
 
 - `canvas_id` required (from a prior `fx_get_timeseries` call)
 - Returns each staged table's `kind`, `row_count`, and column schema (`name`, `type`, `nullable`), plus `expires_at`
-- Required first step before `fx_dataframe_query`; needs `CANVAS_PROVIDER_TYPE=duckdb` — unregistered otherwise
+- Required first step before `fx_dataframe_query`; unregistered when `CANVAS_PROVIDER_TYPE=none`
 - `canvas_not_found` when the ID doesn't exist or has expired
 
 ---
@@ -117,7 +122,7 @@ All resource data is also reachable via tools — use `fx_list_currencies` or `f
 - Supports aggregations, GROUP BY, window functions, and JOINs across tables from multiple `fx_get_timeseries` calls
 - Returns at most `row_limit` rows; `truncated: true` plus a `notice` give the `ORDER BY <column> LIMIT <n> OFFSET <m>` shape for the next page — ORDER BY is required for stable paging
 - Markdown table cells are escaped so pipes, angle brackets, and line breaks stay inside their cell; `structuredContent` keeps raw values
-- Needs `CANVAS_PROVIDER_TYPE=duckdb`; typed failures: `canvas_not_found`, `missing_table`, `invalid_query`
+- Unregistered when `CANVAS_PROVIDER_TYPE=none`; typed failures: `canvas_not_found`, `missing_table`, `invalid_query`
 
 ---
 
@@ -126,7 +131,7 @@ All resource data is also reachable via tools — use `fx_list_currencies` or `f
 - `canvas_id` and exact `table_name` (from `fx_dataframe_describe`) required
 - Removes one staged table or view; ECB rate data is untouched and the series can be re-staged via `fx_get_timeseries`
 - Returns `dropped: true`/`false` depending on whether the table existed
-- Disabled unless `FX_ENABLE_CANVAS_DROP=true` — otherwise absent from `tools/list`, named with its enable hint only in the startup log and the HTTP landing page; also needs `CANVAS_PROVIDER_TYPE=duckdb`
+- Disabled unless `FX_ENABLE_CANVAS_DROP=true` — otherwise absent from `tools/list`, named with its enable hint only in the startup log and the HTTP landing page; also unregistered when `CANVAS_PROVIDER_TYPE=none`
 
 ---
 
@@ -152,8 +157,8 @@ ECB-specific:
 - Keyless access via [Frankfurter](https://www.frankfurter.dev/) — a Cloudflare-fronted ECB proxy; no API keys required
 - Cross-rate triangulation: any pair works — USD → JPY is one upstream call, cross-rated through EUR on Frankfurter's side
 - Weekend/holiday date semantics: `date_snapped` surfaces when the API returns a different date than requested
-- Identity pairs never reach the upstream API: a currency against itself returns a rate of 1, dated to the day the ECB actually published for that currency rather than to the calendar date requested
-- Long time-series spill to DataCanvas (DuckDB) when enabled, for SQL aggregation over the full range
+- Identity rates are computed locally as 1; an upstream proxy quote supplies the actual publication dates for that currency
+- Long time-series that exceed the inline preview budget stage on DataCanvas (DuckDB, on by default) for SQL aggregation over the full range
 
 Agent-friendly output:
 
@@ -237,7 +242,7 @@ Or with Docker:
 }
 ```
 
-To enable DataCanvas for long time-series SQL analytics — which also registers `fx_dataframe_describe` and `fx_dataframe_query`, skipped from `tools/list` otherwise — add `CANVAS_PROVIDER_TYPE=duckdb`:
+DataCanvas (DuckDB) is on by default for long time-series SQL analytics. To turn it off — which also drops `fx_dataframe_describe` and `fx_dataframe_query` from `tools/list` and returns every `fx_get_timeseries` range inline — add `CANVAS_PROVIDER_TYPE=none`:
 
 ```json
 {
@@ -248,7 +253,7 @@ To enable DataCanvas for long time-series SQL analytics — which also registers
       "args": ["@cyanheads/exchange-rates-mcp-server@latest"],
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
-        "CANVAS_PROVIDER_TYPE": "duckdb"
+        "CANVAS_PROVIDER_TYPE": "none"
       }
     }
   }
@@ -303,9 +308,9 @@ All configuration is validated at startup via Zod schemas. Environment variables
 | Variable | Description | Default |
 |:---------|:------------|:--------|
 | `FRANKFURTER_BASE_URL` | Frankfurter API base URL. Override for local testing or a self-hosted instance. | `https://api.frankfurter.dev/v1` |
-| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` spills to DataCanvas, when one is configured. | `90` |
+| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` considers DataCanvas staging; series that fit the preview remain inline. | `90` |
 | `FX_ENABLE_CANVAS_DROP` | Enable the destructive `fx_dataframe_drop` tool. Off by default: the tool is not registered and is absent from `tools/list`. | `false` |
-| `CANVAS_PROVIDER_TYPE` | Canvas engine. Set to `duckdb` to enable DataCanvas for `fx_get_timeseries` long-range spillover and to register the three `fx_dataframe_*` tools. At `none` they are skipped from `tools/list`. | `none` |
+| `CANVAS_PROVIDER_TYPE` | Canvas engine. `duckdb` enables DataCanvas for `fx_get_timeseries` long-range spillover and registers the three `fx_dataframe_*` tools; `none` disables it and skips them from `tools/list`. An empty value takes the default. The `.mcpb` bundle sets `none`. | `duckdb` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
 | `MCP_SESSION_MODE` | HTTP session mode: `auto`, `stateful`, or `stateless`. The server declares `stateless` in code — no handler here asks the client for input mid-call, so nothing needs a session to resume — and setting this variable overrides that declaration. | `stateless` |

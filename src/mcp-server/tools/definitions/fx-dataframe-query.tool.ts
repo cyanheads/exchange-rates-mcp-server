@@ -27,8 +27,8 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     'Run a read-only SQL SELECT against DataCanvas tables staged by fx_get_timeseries. ' +
     'Supports aggregations, GROUP BY, window functions, and JOINs across multiple registered tables. ' +
     'Run fx_dataframe_describe first to discover table names and column schemas. ' +
-    'Requires DataCanvas (CANVAS_PROVIDER_TYPE=duckdb) — without it this tool is not listed at all ' +
-    'and fx_get_timeseries returns every range inline.',
+    'Requires DataCanvas, which is on by default — a deployment that turns it off does not list this ' +
+    'tool at all, and fx_get_timeseries returns every range inline there.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

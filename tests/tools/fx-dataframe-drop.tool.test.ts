@@ -9,7 +9,7 @@
  */
 
 import { JsonRpcErrorCode, notFound } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxDataframeDrop } from '@/mcp-server/tools/definitions/fx-dataframe-drop.tool.js';
 import * as canvasModule from '@/services/canvas/canvas-accessor.js';
@@ -107,6 +107,37 @@ describe('fx_dataframe_drop', () => {
       code: JsonRpcErrorCode.NotFound,
       data: { reason: 'canvas_not_found' },
     });
+  });
+
+  it('does not tell callers to recreate an expired canvas merely to clean it up', async () => {
+    const expired = notFound('Canvas not found or expired.', {
+      reason: 'canvas_not_found',
+      recovery: { hint: 'Re-run fx_get_timeseries to obtain a fresh canvas_id.' },
+    });
+    mockAcquire.mockRejectedValue(expired);
+    mockGetCanvas.mockReturnValue({ acquire: mockAcquire } as unknown as ReturnType<
+      typeof canvasModule.getCanvas
+    >);
+
+    const result = await runToolContract(fxDataframeDrop, {
+      canvas_id: 'expired123',
+      table_name: 'fx_usd_eur',
+    });
+    const error = (
+      result.structuredContent as {
+        error: { code: number; data: { reason: string; recovery: { hint: string } } };
+      }
+    ).error;
+    const text = result.content.map((item) => ('text' in item ? item.text : '')).join('\n');
+
+    expect(error.code).toBe(JsonRpcErrorCode.NotFound);
+    expect(error.data.reason).toBe('canvas_not_found');
+    expect(error.data.recovery.hint).toBe(
+      'This canvas is absent or expired; no cleanup is needed.',
+    );
+    expect(text).toContain(error.data.recovery.hint);
+    expect(text).not.toContain('Re-run fx_get_timeseries');
+    expect(mockDrop).not.toHaveBeenCalled();
   });
 
   it('rethrows an unclassified drop failure instead of blaming the canvas_id', async () => {

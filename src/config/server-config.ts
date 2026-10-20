@@ -4,7 +4,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
+import { normalizeEnv, parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
   frankfurterBaseUrl: z
@@ -16,7 +16,7 @@ const ServerConfigSchema = z.object({
     .number()
     .default(90)
     .describe(
-      'Day count above which fx_get_timeseries spills the result to DataCanvas instead of inlining.',
+      'Day count above which fx_get_timeseries considers DataCanvas staging; series that fit the preview remain inline.',
     ),
   enableCanvasDrop: z
     .stringbool()
@@ -25,6 +25,15 @@ const ServerConfigSchema = z.object({
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
+
+/** Read only the registration flag; setup validates invalid values through the startup boundary. */
+export function isCanvasDropEnabled(): boolean {
+  const flag = ServerConfigSchema.shape.enableCanvasDrop.safeParse(
+    normalizeEnv({ FX_ENABLE_CANVAS_DROP: process.env.FX_ENABLE_CANVAS_DROP })
+      .FX_ENABLE_CANVAS_DROP,
+  );
+  return flag.success && flag.data;
+}
 
 /** Return the parsed, validated server config (lazy-init on first call). */
 export function getServerConfig(): z.infer<typeof ServerConfigSchema> {

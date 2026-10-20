@@ -14,6 +14,7 @@ import {
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
 export const fxConvertCurrency = tool('fx_convert_currency', {
+  inputAliases: { base: 'base_currency', quote: 'quote_currency' },
   description:
     'Convert an amount between any two currencies at the latest or a historical rate. ' +
     'Returns the converted amount, the rate used, the actual rate date, and whether the ' +
@@ -127,8 +128,9 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
 
     let resolved: ResolvedRate;
     try {
-      resolved = await service.getRate(input.base_currency, input.quote_currency, date);
+      resolved = await service.getRate(input.base_currency, input.quote_currency, date, ctx.signal);
     } catch (err) {
+      ctx.signal.throwIfAborted();
       const failure = failureOf(err);
       if (failure?.reason === 'unsupported_currency') {
         throw ctx.fail('unsupported_currency', (err as Error).message, {

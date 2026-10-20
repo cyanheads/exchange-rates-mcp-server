@@ -6,7 +6,7 @@
 import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { getServerConfig } from '@/config/server-config.js';
+import { isCanvasDropEnabled } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
 
 const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
@@ -25,7 +25,7 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
   input: z.object({
     canvas_id: CanvasIdSchema.describe(
       'Canvas ID returned by fx_get_timeseries. ' +
-        'Re-run fx_get_timeseries to obtain a fresh canvas_id if this one has expired.',
+        'If this canvas has expired, no cleanup is needed.',
     ),
     table_name: z
       .string()
@@ -44,7 +44,7 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
       reason: 'canvas_not_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'canvas_id does not exist or has been evicted.',
-      recovery: 'Re-run fx_get_timeseries to obtain a fresh canvas_id.',
+      recovery: 'This canvas is absent or expired; no cleanup is needed.',
     },
     {
       reason: 'canvas_unavailable',
@@ -74,7 +74,12 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
       const reason =
         err instanceof McpError ? (err.data as { reason?: string } | undefined)?.reason : undefined;
       if (reason === 'canvas_not_found') {
-        throw ctx.fail('canvas_not_found', `Canvas "${input.canvas_id}" not found or has expired.`);
+        throw ctx.fail(
+          'canvas_not_found',
+          `Canvas "${input.canvas_id}" not found or has expired.`,
+          undefined,
+          { cause: err },
+        );
       }
       throw err;
     }
@@ -104,7 +109,7 @@ const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
  * enable hint only in the startup log and on the HTTP landing page, until an
  * operator opts in.
  */
-export const fxDataframeDrop = getServerConfig().enableCanvasDrop
+export const fxDataframeDrop = isCanvasDropEnabled()
   ? fxDataframeDropDefinition
   : disabledTool(fxDataframeDropDefinition, {
       reason: 'DataCanvas table deletion is disabled on this deployment.',

@@ -8,7 +8,7 @@
 |:-----|:------------|:-----------|:------------|
 | `fx_convert_currency` | Convert an amount between any two currencies at the latest or a historical rate. Returns the converted amount, rate used, rate date, and whether the date was snapped from a weekend/holiday. Cross-rates are triangulated through EUR automatically. The primary tool for agent-driven FX workflows. | `base_currency`, `quote_currency`, `amount`, `date?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `fx_get_rate` | Get the exchange rate for a currency pair on a date (default: latest). Returns the rate, the actual rate date (may differ from requested date on weekends/holidays), and source provenance. Use when the agent wants the rate number without doing a conversion. | `base_currency`, `quote_currency`, `date?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
-| `fx_get_timeseries` | Historical daily rates for a currency pair over a date range. Returns a date-keyed series for trend analysis or charting. Inline results are paged at 500 publication days — `truncated` plus `next_start_date`, which the caller passes back as `start_date`. Long ranges (>90 days) spill to DataCanvas when it is enabled. ECB publishes on business days only — weekends and holidays produce no entry (not snapped). | `base_currency`, `quote_currency`, `start_date`, `end_date`, `canvas_id?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
+| `fx_get_timeseries` | Historical daily rates for a currency pair over a date range. Returns a date-keyed series for trend analysis or charting. Inline results are paged at 500 publication days — `truncated` plus `next_start_date`, which the caller passes back as `start_date`. Long ranges (>90 days) stage on DataCanvas when they exceed the 40,000-character preview budget; inline-fit series stay inline. DataCanvas is on by default (`CANVAS_PROVIDER_TYPE=none` turns it off). ECB publishes on business days only — weekends and holidays produce no entry (not snapped). | `base_currency`, `quote_currency`, `start_date`, `end_date`, `canvas_id?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `fx_get_rates` | All available rates for one base currency in a single snapshot (default: latest). Useful for bulk comparison and seeding downstream tools. Returns a map of quote currency → rate, the actual snapshot date, and `date_snapped`. `symbols`, when sent, must be non-empty. | `base_currency`, `date?`, `symbols?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `fx_list_currencies` | All supported ISO 4217 currency codes with their full names. Use before converting to disambiguate "dollars" (USD vs AUD vs CAD vs HKD vs SGD) or to validate user-supplied codes. Served from a day-long cache; a cache miss calls Frankfurter. | *(none)* | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `fx_dataframe_describe` | List DataCanvas tables and columns from a prior `fx_get_timeseries` call that returned a `canvas_id`. Required first step before `fx_dataframe_query`. | `canvas_id` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` |
@@ -16,6 +16,8 @@
 | `fx_dataframe_drop` | Permanently remove one staged table or view from a DataCanvas. Deletes staged analytical data only; ECB rate data is untouched and the series can be re-staged. Opt-in via `FX_ENABLE_CANVAS_DROP`; registered with `disabledTool()` while the flag is off. | `canvas_id`, `table_name` | `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 
 ### Error Contracts
+
+`base` aliases `base_currency` on all four currency-input tools; `quote` aliases `quote_currency` on the three pair tools. Definition-level `inputAliases` preserves values and canonical advertised schemas. The framework rejects alias/canonical collisions instead of choosing a value.
 
 Domain failures to declare as `errors: [{ reason, code, when }]` on each tool. Baseline errors (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`) bubble automatically and are not listed.
 
@@ -49,7 +51,7 @@ Every `unsupported_currency` rejection — on all four rate tools and on `fx://r
 
 Schema-level argument rejections — an empty `symbols` array on `fx_get_rates`, a non-positive `amount`, a `row_limit` outside 1–10,000 on `fx_dataframe_query` — never reach a handler, so they return `InvalidParams` with Zod's issues and carry no contract `reason`; the field's `.describe()` text is the only guidance a caller sees, so it states the constraint.
 
-Recovery hints: `unsupported_currency` → "Call `fx_list_currencies` to get valid codes"; `invalid_date_format` → "Pass an ISO 8601 calendar date in YYYY-MM-DD form"; `date_out_of_range` → "ECB data starts 1999-01-04; omit `date` for latest"; `upstream_no_data` → "Try a more recent date — ECB history starts later for some currencies"; `missing_table` → "Call `fx_dataframe_describe` to list the staged tables"; `canvas_not_found` → "Re-run `fx_get_timeseries` to obtain a fresh `canvas_id`"; `invalid_query` → "Run `fx_dataframe_describe` first to verify table and column names"; `canvas_unavailable` → "Set `CANVAS_PROVIDER_TYPE=duckdb` to enable DataCanvas".
+Recovery hints: `unsupported_currency` → "Call `fx_list_currencies` to get valid codes"; `invalid_date_format` → "Pass an ISO 8601 calendar date in YYYY-MM-DD form"; `date_out_of_range` → "ECB data starts 1999-01-04; omit `date` for latest"; `upstream_no_data` → "Try a more recent date — ECB history starts later for some currencies"; `missing_table` → "Call `fx_dataframe_describe` to list the staged tables"; `canvas_not_found` → "Re-run `fx_get_timeseries` to obtain a fresh `canvas_id`" for reads, or "This canvas is absent or expired; no cleanup is needed" for drop; `invalid_query` → "Run `fx_dataframe_describe` first to verify table and column names"; `canvas_unavailable` → "Set `CANVAS_PROVIDER_TYPE=duckdb` to enable DataCanvas".
 
 ### Resources
 
@@ -96,7 +98,9 @@ Fills a fleet gap: `coingecko` is crypto, `finnhub` is equities. This is the fia
 
 | Service | Wraps | Used By |
 |:--------|:------|:--------|
-| `FrankfurterService` | Frankfurter API (`https://api.frankfurter.dev/v1`) | All `fx_*` tools |
+| `FrankfurterService` | Frankfurter API (`https://api.frankfurter.dev/v1`) | Five rate/currency tools and both resources |
+
+Caller cancellation flows through currency validation, fetch, response-body consumption, and retry backoff. Each attempt composes the caller signal with the existing 10-second timeout; the retry policy remains two retries with no separate total deadline. Currency loads are independent in flight, and only completed, uncancelled loads populate the day-long cache.
 
 ---
 
@@ -105,7 +109,8 @@ Fills a fleet gap: `coingecko` is crypto, `finnhub` is equities. This is the fia
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
 | `FRANKFURTER_BASE_URL` | No | Override Frankfurter base URL. Default: `https://api.frankfurter.dev/v1`. Useful for local testing or self-hosted Frankfurter. |
-| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | No | Day-count threshold above which `fx_get_timeseries` spills to DataCanvas instead of inline. Default: `90`. |
+| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | No | Day-count threshold above which `fx_get_timeseries` considers staging on DataCanvas; series within the preview budget remain inline. Default: `90`. |
+| `FX_ENABLE_CANVAS_DROP` | No | Opt in to staged-table deletion. Default: `false`. Registration reads this field non-throwingly with its schema; setup validates the full server config. |
 
 No API keys required.
 
@@ -114,7 +119,7 @@ No API keys required.
 ## Implementation Order
 
 1. **Config** — `src/config/server-config.ts` with Zod schema for env vars above
-2. **FrankfurterService** — init/accessor, typed response shapes, retry wrapper, `fetchWithTimeout`, error classification
+2. **FrankfurterService** — init/accessor, typed response shapes, retry wrapper, abortable fetch with per-attempt timeout, error classification
 3. **`fx_list_currencies`** — simplest tool; confirms service wiring
 4. **`fx_get_rates`** — bulk snapshot; validates `base` + `symbols` filtering logic
 5. **`fx_get_rate`** — single pair; validates cross-rate math + date-snap detection
@@ -140,20 +145,19 @@ Each step is independently testable.
 
 ## Workflow Analysis
 
-**`fx_convert_currency`** (1–2 upstream calls, depending on whether a cross-rate is needed):
+**`fx_convert_currency`** (one rate call, plus a currency-list fetch on a cold cache):
 
 | # | Call | Purpose | Note |
 |:--|:-----|:--------|:-----|
 | 1 | `GET /v1/{date}?base={base}&symbols={quote}` | Fetch the rate for the pair on the requested date | `latest` if no date given |
-| — | *(no extra call)* | ECB is EUR-base; when one side is EUR, the rate is direct | base=EUR or quote=EUR: 1 call |
-| — | *(triangulation)* | When neither side is EUR, the service computes `base/EUR × EUR/quote` from a single multi-symbol fetch | base≠EUR, quote≠EUR: still 1 call — fetch both EUR/base and EUR/quote in one request |
+| — | *(no extra call)* | Frankfurter resolves direct and cross-rate pairs | One rate call for either case |
 
-**`fx_get_timeseries`** (1 upstream call + optional canvas registration):
+**`fx_get_timeseries`** (one range call, a currency-list fetch on a cold cache, and optional canvas registration):
 
 | # | Call | Purpose | Note |
 |:--|:-----|:--------|:-----|
 | 1 | `GET /v1/{start}..{end}?base={base}&symbols={quote}` | Fetch the full date range | Single call regardless of range length |
-| 2 | Canvas register | Register rows as a DuckDB table | Only when day count > threshold (~90) |
+| 2 | Canvas register | Register rows as a DuckDB table | Only when day count > threshold (~90) and rows exceed the inline preview budget |
 
 Output schema: `base_currency`, `quote_currency`, `start_date` (first publication day in the requested range — may differ from requested if the requested start falls on a holiday), `end_date` (last publication day in the requested range), `rates` (date → rate map; business days only; at most 500 entries inline), `rate_count` (publication days in the whole requested range, not the entries in `rates`), `truncated` (`rates` holds only part of the series), `next_start_date` (inline page cut short — the first date not in `rates`), `rate_type`, `source`, `spilled`. When canvas spill occurs: `canvas_id` and `table_name` (for `fx_dataframe_describe`, then `fx_dataframe_query`), `truncated: true` with `rates` a preview, and a `notice` naming both dataframe tools. The actual `start_date`/`end_date` from the API response must be surfaced — the API snaps range boundaries to business days silently, and the agent needs to see the actual window returned.
 
@@ -163,9 +167,9 @@ Output schema: `base_currency`, `quote_currency`, `start_date` (first publicatio
 
 ## Design Decisions
 
-**Cross-rate math in the service, not the tool.** `fx_convert_currency` and `fx_get_rate` both need cross-rates; putting the triangulation in `FrankfurterService.getRate(base, quote, date)` keeps tool handlers thin and the math testable.
+**Cross-rates resolved by Frankfurter.** `FrankfurterService.getRate(base, quote, date, signal)` sends the requested pair to Frankfurter, keeping tool handlers thin; the service performs no local triangulation.
 
-**One call for cross-rates.** When neither side is EUR (e.g., USD→JPY), we don't need two API calls — we fetch `GET /latest?base=EUR&symbols=USD,JPY` in one request and compute `JPY_rate / USD_rate`. This avoids N+1 and respects Frankfurter's reasonable rate limits.
+**One rate call for cross-rates.** When neither side is EUR (e.g., USD→JPY), `GET /latest?base=USD&symbols=JPY` resolves the pair upstream. A cold currency cache adds one `/currencies` request for validation.
 
 **`fx_get_timeseries` doesn't snap dates.** The ECB publishes on business days; weekends and holidays simply don't appear in the series. The tool returns exactly what the API returns — a sparse series with only business-day keys — and documents this in the output. In contrast, `fx_get_rate` and `fx_convert_currency` (point-in-time) surface the snap because the caller asked for a specific date and got a different one.
 
@@ -177,7 +181,11 @@ Output schema: `base_currency`, `quote_currency`, `start_date` (first publicatio
 
 **`fx_dataframe_query` defaults `row_limit` to 150.** Every returned row renders on both surfaces — about 125 B/row serialized for the staged `date`/`rate` table — so 150 rows measure ~19 KB on the wire, inside the framework's 24 KB outline budget, where 200 rows measure ~25 KB. The 10,000 maximum is DataCanvas's own materialization ceiling, so raising the limit never exceeds what an unbounded query returned before.
 
-**DataCanvas threshold configurable via env.** The 90-day default keeps time-series inline for quarterly lookups (the most common case), while multi-year pulls (e.g., for charting since 2000) spill to canvas where the agent can aggregate. The threshold is a config knob so it can be tuned without a code change.
+**DataCanvas threshold configurable via env.** The 90-day default keeps short ranges inline. Longer ranges are staged only when they exceed the 40,000-character preview budget, giving the agent SQL over large series while small ones stay inline. The threshold can be tuned without a code change.
+
+**Canvas cleanup follows acquisition ownership.** An inline-fit result, staging failure, or cancellation releases a newly acquired canvas because no usable handle reaches the caller. A successful spill retains it, and a supplied existing canvas is never dropped by this cleanup.
+
+**DataCanvas on by default, except in the MCPB bundle.** `src/index.ts` sets `CANVAS_PROVIDER_TYPE` to `duckdb` when it is unset or empty, after the framework loads `.env`, so npm, Docker, and plugin installs get SQL over long series without configuration and `none` still opts out. The bundle strips DuckDB's native binding to stay portable, so `manifest.json` pins `none`: it starts cleanly and pages long ranges inline instead of failing on the first spill.
 
 **No MirrorService.** The ECB publishes a full-history bulk file (`eurofxref-hist`, ~2MB XML), which is technically mirror-able. However, the live API is fast (< 100ms, Cloudflare-cached), keyless, and reliably returns 200s for all in-range dates. A mirror would add SQLite tooling and a sync scheduler for no user-visible benefit given the data volume and query patterns. Revisit if Frankfurter ever gates behind auth or shows reliability issues.
 

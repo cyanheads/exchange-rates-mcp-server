@@ -51,7 +51,7 @@ const buildSeriesResponse = (
 describe('fx_get_timeseries', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCanvas.mockReturnValue(undefined); // canvas disabled by default
+    mockGetCanvas.mockReturnValue(undefined); // no canvas unless a test supplies one
   });
 
   it('returns inline rates for short range (no canvas)', async () => {

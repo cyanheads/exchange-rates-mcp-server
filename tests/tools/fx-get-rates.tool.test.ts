@@ -59,7 +59,7 @@ describe('fx_get_rates', () => {
     const ctx = createMockContext({ errors: fxGetRates.errors });
     const result = await fxGetRates.handler({ base_currency: 'USD', symbols: ['USD', 'EUR'] }, ctx);
 
-    expect(mockGetRates).toHaveBeenCalledWith('USD', 'latest', ['USD', 'EUR']);
+    expect(mockGetRates).toHaveBeenCalledWith('USD', 'latest', ['USD', 'EUR'], ctx.signal);
     expect(result.rates).toEqual({ EUR: 0.92, USD: 1 });
   });
 
@@ -108,7 +108,7 @@ describe('fx_get_rates', () => {
       const ctx = createMockContext({ errors: fxGetRates.errors });
       const result = await fxGetRates.handler({ base_currency: 'USD', date: '2024-06-03' }, ctx);
 
-      expect(mockGetRates).toHaveBeenCalledWith('USD', '2024-06-03', undefined);
+      expect(mockGetRates).toHaveBeenCalledWith('USD', '2024-06-03', undefined, ctx.signal);
       expect(result).toMatchObject({ rate_date: '2024-06-03', date_snapped: false });
     });
 

@@ -7,6 +7,7 @@
  * @module tests/tools/fx-tool-contracts.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { toolContractSuite } from '@cyanheads/mcp-ts-core/testing/vitest';
@@ -22,6 +23,66 @@ import type { FrankfurterRateResponse, ResolvedRate } from '@/services/frankfurt
 const mockGetRate = vi.fn<(...args: unknown[]) => Promise<ResolvedRate>>();
 const mockGetRates = vi.fn<(...args: unknown[]) => Promise<FrankfurterRateResponse>>();
 const mockGetTimeSeries = vi.fn();
+
+describe('currency input aliases', () => {
+  const cases = [
+    { tool: fxGetRate, extra: {}, pair: true, mock: mockGetRate },
+    { tool: fxConvertCurrency, extra: { amount: 100 }, pair: true, mock: mockGetRate },
+    { tool: fxGetRates, extra: {}, pair: false, mock: mockGetRates },
+    {
+      tool: fxGetTimeseries,
+      extra: { start_date: '2024-06-03', end_date: '2024-06-04' },
+      pair: true,
+      mock: mockGetTimeSeries,
+    },
+  ];
+
+  it.each(cases)(
+    '$tool.name characterizes canonical fields and rejects unknown keys',
+    async ({ tool, extra, pair }) => {
+      const input = { base_currency: 'usd', ...(pair && { quote_currency: 'eur' }), ...extra };
+      const result = await runToolContract(tool as typeof fxGetRate, input as never);
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ base_currency: 'USD' });
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining('USD') });
+      expect(
+        (await runToolContract(tool as typeof fxGetRate, { ...input, unknown_key: 'USD' } as never))
+          .isError,
+      ).toBe(true);
+      const properties = z.toJSONSchema(tool.input).properties!;
+      expect(properties).toHaveProperty('base_currency');
+      expect(properties).not.toHaveProperty('base');
+      expect(properties).not.toHaveProperty('quote');
+    },
+  );
+
+  it.each(cases)(
+    '$tool.name accepts aliases unchanged and rejects canonical collisions on both surfaces',
+    async ({ tool, extra, pair, mock }) => {
+      mock.mockClear();
+      const input = { base: 'usd', ...(pair && { quote: 'eur' }), ...extra };
+      const result = await runToolContract(tool as typeof fxGetRate, input as never);
+      expect(result.isError).toBeFalsy();
+      expect(mock.mock.calls[0]?.[0]).toBe('usd');
+      if (pair) expect(mock.mock.calls[0]?.[1]).toBe('eur');
+      expect(result.structuredContent).toMatchObject({ base_currency: 'USD' });
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining('USD') });
+      for (const canonical of ['base_currency', ...(pair ? ['quote_currency'] : [])]) {
+        const collision = await runToolContract(
+          tool as typeof fxGetRate,
+          {
+            ...input,
+            [canonical]: 'GBP',
+          } as never,
+        );
+        expect(collision.isError).toBe(true);
+        expect(JSON.stringify(collision.structuredContent)).toContain('send one of them, not both');
+        expect(JSON.stringify(collision.content)).toContain('send one of them, not both');
+      }
+      expect(mock).toHaveBeenCalledTimes(1);
+    },
+  );
+});
 
 vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
   getRate: mockGetRate,
@@ -354,7 +415,7 @@ describe('unsupported_currency wire envelope', () => {
         reason: 'unsupported_currency',
         recovery: { hint: expect.stringContaining('fx_list_currencies') },
         rejected_codes: rejected,
-      });
+      } as never);
       expect(error.message.startsWith(`${field} `)).toBe(true);
       expect(error.message.endsWith(ACCEPTED_TEXT)).toBe(true);
       expect(error.message.split('Accepted:')).toHaveLength(2);

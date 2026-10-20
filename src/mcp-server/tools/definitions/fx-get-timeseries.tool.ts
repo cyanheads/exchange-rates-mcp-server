@@ -36,6 +36,7 @@ const SERIES_SCHEMA: ColumnSchema[] = [
 ];
 
 export const fxGetTimeseries = tool('fx_get_timeseries', {
+  inputAliases: { base: 'base_currency', quote: 'quote_currency' },
   description:
     'Get historical daily exchange rates for a currency pair over a date range. ' +
     'ECB publishes on business days only — weekends and holidays produce no entry, and no date ' +
@@ -46,10 +47,11 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     'rate_count is always the total for the requested range, and when a page is cut short the ' +
     'response carries truncated=true and next_start_date — call again with start_date set to ' +
     'next_start_date and the same end_date for the next page. ' +
-    'When DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb) long ranges (>90 days by default) spill ' +
-    'to it instead: the response carries spilled=true, a canvas_id, and a table_name — call ' +
-    'fx_dataframe_describe to inspect the staged table, then fx_dataframe_query to run SQL against it. ' +
-    'Without DataCanvas long ranges are paged inline (spilled=false) and the notice says so.',
+    'Long ranges (>90 days by default) are considered for DataCanvas staging: when the series ' +
+    'exceeds the 40,000-character preview budget, it is staged and the response carries ' +
+    'spilled=true, a canvas_id, and a table_name — call fx_dataframe_describe to inspect the staged ' +
+    'table, then fx_dataframe_query to run SQL against it. ' +
+    'On a deployment with DataCanvas turned off, long ranges are paged inline (spilled=false) and the notice says so.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -137,7 +139,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     spilled: z
       .boolean()
       .describe(
-        'True when the full result was staged on the DataCanvas (range exceeded threshold).',
+        'True when the range exceeded the staging threshold and the series exceeded the inline preview budget, so the full result was staged on DataCanvas.',
       ),
     canvas_id: z
       .string()
@@ -162,7 +164,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .describe(
         'Explains a result that would otherwise look broken or incomplete: an empty series (no ' +
           'publication day in the range); an inline page cut short (the start_date to continue ' +
-          'from, plus why a long range was not staged when DataCanvas is not configured); or a ' +
+          'from, plus why a long range was not staged when DataCanvas is turned off); or a ' +
           'spilled series (the canvas and table it was staged to, and the tools that read it).',
       ),
   },
@@ -249,8 +251,10 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         input.quote_currency,
         input.start_date,
         input.end_date,
+        ctx.signal,
       );
     } catch (err) {
+      ctx.signal.throwIfAborted();
       const failure = failureOf(err);
       if (failure?.reason === 'unsupported_currency') {
         throw ctx.fail('unsupported_currency', (err as Error).message, {
@@ -294,41 +298,47 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     if (canvas != null && exceedsThreshold) {
       const instance = await canvas.acquire(input.canvas_id, ctx);
       const tableName = `fx_${input.base_currency.toLowerCase()}_${input.quote_currency.toLowerCase()}`;
+      let retained = false;
+      try {
+        const spillResult = await spillover({
+          canvas: instance,
+          source: rows,
+          schema: SERIES_SCHEMA,
+          tableName,
+          previewChars: 40_000, // ~10k tokens preview
+          signal: ctx.signal,
+        });
+        ctx.signal.throwIfAborted();
 
-      const spillResult = await spillover({
-        canvas: instance,
-        source: rows,
-        schema: SERIES_SCHEMA,
-        tableName,
-        previewChars: 40_000, // ~10k tokens preview
-        signal: ctx.signal,
-      });
+        ctx.log.info('Spilled to canvas', {
+          canvasId: instance.canvasId,
+          tableName,
+          rowCount: rows.length,
+          spilled: spillResult.spilled,
+        });
 
-      ctx.log.info('Spilled to canvas', {
-        canvasId: instance.canvasId,
-        tableName,
-        rowCount: rows.length,
-        spilled: spillResult.spilled,
-      });
-
-      if (spillResult.spilled) {
-        const { rowCount, tableName: stagedTable } = spillResult.handle;
-        ctx.enrich.notice(
-          `Staged ${rowCount} rows to table "${stagedTable}" on canvas ${instance.canvasId} — call ` +
-            'fx_dataframe_describe to inspect its columns, then fx_dataframe_query to run SQL over the ' +
-            'full series. rates holds only a preview.',
-        );
-        return {
-          ...envelope,
-          rates: Object.fromEntries(spillResult.previewRows.map((row) => [row.date, row.rate])),
-          rate_count: rowCount,
-          truncated: true,
-          spilled: true,
-          canvas_id: instance.canvasId,
-          table_name: stagedTable,
-        };
+        if (spillResult.spilled) {
+          const { rowCount, tableName: stagedTable } = spillResult.handle;
+          ctx.enrich.notice(
+            `Staged ${rowCount} rows to table "${stagedTable}" on canvas ${instance.canvasId} — call ` +
+              'fx_dataframe_describe to inspect its columns, then fx_dataframe_query to run SQL over the ' +
+              'full series. rates holds only a preview.',
+          );
+          retained = true;
+          return {
+            ...envelope,
+            rates: Object.fromEntries(spillResult.previewRows.map((row) => [row.date, row.rate])),
+            rate_count: rowCount,
+            truncated: true,
+            spilled: true,
+            canvas_id: instance.canvasId,
+            table_name: stagedTable,
+          };
+        }
+        // Every row fit the preview budget, so nothing was staged — page it inline below.
+      } finally {
+        if (instance.isNew && !retained) await canvas.drop(instance.canvasId, ctx);
       }
-      // Every row fit the preview budget, so nothing was staged — page it inline below.
     }
 
     const page = rows.slice(0, INLINE_PAGE_SIZE);

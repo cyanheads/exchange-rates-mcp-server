@@ -30,7 +30,7 @@
         },
         {
           "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
-          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics, when DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb). Longer ranges return inline otherwise.",
+          "description": "Day range above which fx_get_timeseries considers DataCanvas staging for SQL analytics. Series that fit the preview remain inline. DataCanvas is on by default; CANVAS_PROVIDER_TYPE=none keeps all ranges inline.",
           "format": "string",
           "isRequired": false,
           "default": "90"
@@ -76,7 +76,7 @@
         },
         {
           "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
-          "description": "Day range above which fx_get_timeseries spills results to DataCanvas for SQL analytics, when DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb). Longer ranges return inline otherwise.",
+          "description": "Day range above which fx_get_timeseries considers DataCanvas staging for SQL analytics. Series that fit the preview remain inline. DataCanvas is on by default; CANVAS_PROVIDER_TYPE=none keeps all ranges inline.",
           "format": "string",
           "isRequired": false,
           "default": "90"
