@@ -134,7 +134,7 @@ const ServerConfigSchema = z.object({
   frankfurterBaseUrl: z.string().url().default('https://api.frankfurter.dev/v1')
     .describe('Frankfurter API base URL.'),
   timeseriesCanvasThresholdDays: z.coerce.number().default(90)
-    .describe('Day count above which fx_get_timeseries considers DataCanvas staging; inline-fit series remain inline.'),
+    .describe('Day count above which fx_get_timeseries considers automatic DataCanvas staging; without canvas_id, inline-fit series remain inline.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;

@@ -111,7 +111,7 @@ Caller cancellation flows through currency validation, fetch, response-body cons
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
 | `FRANKFURTER_BASE_URL` | No | Override Frankfurter base URL. Default: `https://api.frankfurter.dev/v1`. Useful for local testing or self-hosted Frankfurter. |
-| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | No | Day-count threshold above which `fx_get_timeseries` considers staging on DataCanvas; series within the preview budget remain inline. Default: `90`. |
+| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | No | Day-count threshold for automatic DataCanvas staging; without `canvas_id`, series within the preview budget remain inline. Explicit `canvas_id` always requests staging. Default: `90`. |
 | `FX_ENABLE_CANVAS_DROP` | No | Opt in to staged-table deletion. Default: `false`. Registration reads this field non-throwingly with its schema; setup validates the full server config. |
 
 No API keys required.

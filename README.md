@@ -44,7 +44,7 @@ Daily exchange rates from Frankfurter v1, with current currency discovery and hi
 | `fx_dataframe_query` | Run a read-only SQL SELECT against a staged DataCanvas table |
 | `fx_dataframe_drop` | Remove one staged DataCanvas table or view (opt-in, destructive) |
 
-DataCanvas (DuckDB) is on by default. Set `CANVAS_PROVIDER_TYPE=none` to turn it off: the three `fx_dataframe_*` tools then drop out of `tools/list`, and `fx_get_timeseries` returns every range inline. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native binding, so it runs with DataCanvas off. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
+DataCanvas (DuckDB) is on by default. Set `CANVAS_PROVIDER_TYPE=none` to turn it off: the three `fx_dataframe_*` tools then drop out of `tools/list`, and `fx_get_timeseries` returns ranges inline when `canvas_id` is omitted; explicit staging fails `canvas_unavailable`. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native binding, so it runs with DataCanvas off. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
 
 The four rate and conversion tools accept `base` as an alias of `base_currency`; pair tools also accept `quote` for `quote_currency`. Send either spelling for a field, never both. Advertised schemas use the canonical names.
 
@@ -246,7 +246,7 @@ Or with Docker:
 }
 ```
 
-DataCanvas (DuckDB) is on by default for long time-series SQL analytics. To turn it off — which also drops `fx_dataframe_describe` and `fx_dataframe_query` from `tools/list` and returns every `fx_get_timeseries` range inline — add `CANVAS_PROVIDER_TYPE=none`:
+DataCanvas (DuckDB) is on by default for long time-series SQL analytics. To turn it off, add `CANVAS_PROVIDER_TYPE=none`: the dataframe tools drop out of `tools/list`, and `fx_get_timeseries` pages inline when `canvas_id` is omitted. Explicit staging fails `canvas_unavailable`.
 
 ```json
 {
@@ -312,7 +312,7 @@ All configuration is validated at startup via Zod schemas. Environment variables
 | Variable | Description | Default |
 |:---------|:------------|:--------|
 | `FRANKFURTER_BASE_URL` | Frankfurter API base URL. Override for local testing or a self-hosted instance. | `https://api.frankfurter.dev/v1` |
-| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` considers DataCanvas staging; series that fit the preview remain inline. | `90` |
+| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` considers automatic DataCanvas staging; without `canvas_id`, series that fit the preview remain inline. Explicit `canvas_id` always requests staging. | `90` |
 | `FX_ENABLE_CANVAS_DROP` | Enable the destructive `fx_dataframe_drop` tool. Off by default: the tool is not registered and is absent from `tools/list`. | `false` |
 | `CANVAS_PROVIDER_TYPE` | Canvas engine. `duckdb` enables DataCanvas for `fx_get_timeseries` long-range spillover and registers the three `fx_dataframe_*` tools; `none` disables it and skips them from `tools/list`. An empty value takes the default. The `.mcpb` bundle sets `none`. | `duckdb` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |

@@ -30,7 +30,7 @@
         },
         {
           "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
-          "description": "Day range above which fx_get_timeseries considers DataCanvas staging for SQL analytics. Series that fit the preview remain inline. DataCanvas is on by default; CANVAS_PROVIDER_TYPE=none keeps all ranges inline.",
+          "description": "Day range above which fx_get_timeseries considers automatic DataCanvas staging for SQL analytics. Without canvas_id, series that fit the preview remain inline. DataCanvas is on by default; CANVAS_PROVIDER_TYPE=none returns ranges inline when canvas_id is omitted and rejects explicit staging.",
           "format": "string",
           "isRequired": false,
           "default": "90"
@@ -76,7 +76,7 @@
         },
         {
           "name": "FX_TIMESERIES_CANVAS_THRESHOLD_DAYS",
-          "description": "Day range above which fx_get_timeseries considers DataCanvas staging for SQL analytics. Series that fit the preview remain inline. DataCanvas is on by default; CANVAS_PROVIDER_TYPE=none keeps all ranges inline.",
+          "description": "Day range above which fx_get_timeseries considers automatic DataCanvas staging for SQL analytics. Without canvas_id, series that fit the preview remain inline. DataCanvas is on by default; CANVAS_PROVIDER_TYPE=none returns ranges inline when canvas_id is omitted and rejects explicit staging.",
           "format": "string",
           "isRequired": false,
           "default": "90"
