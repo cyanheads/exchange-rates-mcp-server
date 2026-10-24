@@ -25,8 +25,8 @@ const baseRate: ResolvedRate = {
   rate: 0.92,
   rateDate: '2024-06-04',
   dateSnapped: false,
-  rateType: 'ECB reference (mid-market)',
-  source: 'ECB via Frankfurter',
+  rateType: 'Daily rate (Frankfurter v1)',
+  source: 'Frankfurter v1',
 };
 
 describe('fx_convert_currency', () => {
@@ -94,7 +94,7 @@ describe('fx_convert_currency', () => {
           reason: 'unsupported_currency',
           rejected_codes: ['XYZ'],
         },
-        message: `${field} "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD.`,
+        message: `${field} "XYZ" is not available in this Frankfurter v1 currency set. Accepted: EUR, GBP, USD.`,
       });
     },
   );
@@ -163,8 +163,8 @@ describe('fx_convert_currency', () => {
       rate: 0.92,
       rate_date: '2024-06-04',
       date_snapped: false,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
     };
     const content = fxConvertCurrency.format!(result);
     const text = (content[0] as { text: string }).text;

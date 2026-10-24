@@ -10,7 +10,7 @@ import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 
 const mockListCurrencies = vi.fn();
 vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
-  listCurrencies: mockListCurrencies,
+  currencyDiscovery: async () => ({ currencies: await mockListCurrencies(), as_of: '2024-06-03' }),
 } as unknown as ReturnType<typeof serviceModule.getFrankfurterService>);
 
 describe('fxCurrenciesResource', () => {
@@ -30,7 +30,8 @@ describe('fxCurrenciesResource', () => {
 
     expect(result.currencies).toHaveLength(3);
     expect(result.count).toBe(3);
-    expect(result.source).toBe('ECB via Frankfurter');
+    expect(result.as_of).toBe('2024-06-03');
+    expect(result.source).toBe('Frankfurter v1');
     expect(result.currencies[0]).toMatchObject({ code: 'EUR', name: 'Euro' });
   });
 

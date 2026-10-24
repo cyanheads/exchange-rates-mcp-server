@@ -12,7 +12,7 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
   name: 'fx-rates-latest',
   description:
     'Latest exchange rates snapshot for a base currency as a stable URI. ' +
-    'Returns all available quote currencies at the most recent ECB business-day fix.',
+    'Returns all available quote currencies at the most recent Frankfurter v1 business-day fix.',
   mimeType: 'application/json',
   params: z.object({
     base: z.string().describe('ISO 4217 base currency code (e.g. USD, EUR, GBP).'),
@@ -28,9 +28,9 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
     rate_type: z
       .string()
       .describe(
-        'Always "ECB reference (mid-market)" — these are reference rates, not tradeable bid/ask.',
+        'Always "Daily rate (Frankfurter v1)" — these are reference rates, not tradeable bid/ask.',
       ),
-    source: z.string().describe('Always "ECB via Frankfurter" — the upstream data provider.'),
+    source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
   }),
 
   async handler(params, ctx) {
@@ -64,8 +64,8 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
       base_currency: raw.base,
       rate_date: raw.date,
       rates: raw.rates,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
     };
   },
 

@@ -86,7 +86,23 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
       },
       ctx,
     );
-    expect(result.spilled).toBe(false);
+    expect(result.spilled).toBe(true);
+    expect(result.truncated).toBe(false);
+    expect(result.table_name).toMatch(/^fx_usd_eur_[a-z0-9]+$/);
+    const again = await fxGetTimeseries.handler(
+      {
+        base_currency: 'USD',
+        quote_currency: 'EUR',
+        start_date: startDate,
+        end_date: endDate,
+        canvas_id: existing.canvasId,
+      },
+      ctx,
+    );
+    expect(again.table_name).not.toBe(result.table_name);
+    expect(
+      (await existing.query(`SELECT count(*)::INTEGER AS n FROM ${result.table_name}`)).rows,
+    ).toEqual([{ n: 2 }]);
     expect(registry.countForTenant('existing-fit')).toBe(1);
     expect((await existing.query('SELECT * FROM keep')).rows).toEqual([{ sentinel: 'preserved' }]);
   });
@@ -107,6 +123,108 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
         expect(JSON.stringify(result.content)).toContain('spilled: false');
         expect(registry.countForTenant(tenantId)).toBe(0);
       }
+    },
+  );
+
+  it.each([0, 1, 2])(
+    'explicitly stages %s rows with schema and complete preview on both surfaces',
+    async (count) => {
+      const tenantId = `explicit-${count}`;
+      const ctx = createMockContext({ tenantId });
+      const existing = await canvas.acquire(undefined, ctx);
+      getTimeSeries.mockResolvedValueOnce({ rows: rows.slice(0, count), startDate, endDate });
+      const result = await runToolContract(
+        fxGetTimeseries,
+        {
+          base_currency: ' usd ',
+          quote_currency: ' eur ',
+          start_date: startDate,
+          end_date: endDate,
+          canvas_id: existing.canvasId,
+        },
+        { context: { tenantId } },
+      );
+      expect(result.isError).toBeFalsy();
+      const data = result.structuredContent as {
+        table_name: string;
+        summary?: {
+          mean: number;
+          change_pct: number;
+          min: { date: string };
+          max: { date: string };
+        };
+      };
+      expect(data).toMatchObject({
+        spilled: true,
+        truncated: false,
+        rate_count: count,
+        base_currency: 'USD',
+        quote_currency: 'EUR',
+        ...(count > 0 && {
+          summary: { mean: 1, change_pct: 0, min: { date: startDate }, max: { date: startDate } },
+        }),
+      });
+      expect(
+        (await existing.query(`SELECT count(*)::INTEGER AS n FROM ${data.table_name}`)).rows,
+      ).toEqual([{ n: count }]);
+      const table = (await existing.describe()).find((table) => table.name === data.table_name);
+      expect(table?.columns.find((column) => column.name === 'rate')?.type).toBe('DOUBLE');
+      expect(JSON.stringify(result.content)).toContain('truncated: false');
+      expect(JSON.stringify(result.content)).toContain(data.table_name);
+      if (count > 0) {
+        expect(JSON.stringify(result.content)).toContain('Mean: 1');
+        expect(JSON.stringify(result.content)).toContain('accounting-policy');
+      } else expect(data).not.toHaveProperty('summary');
+    },
+  );
+
+  it('preserves concurrent repeated pair tables and supports joining another pair', async () => {
+    const ctx = createMockContext({ tenantId: 'concurrent', errors: fxGetTimeseries.errors });
+    const instance = await canvas.acquire(undefined, ctx);
+    getTimeSeries.mockResolvedValue({ rows: rows.slice(0, 2), startDate, endDate });
+    const input = {
+      base_currency: 'USD',
+      quote_currency: 'EUR',
+      start_date: startDate,
+      end_date: endDate,
+      canvas_id: instance.canvasId,
+    };
+    const staged = await Promise.all([
+      fxGetTimeseries.handler(input, ctx),
+      fxGetTimeseries.handler(input, ctx),
+      fxGetTimeseries.handler({ ...input, quote_currency: 'JPY' }, ctx),
+    ]);
+    expect(new Set(staged.map((result) => result.table_name)).size).toBe(3);
+    for (const result of staged)
+      expect(
+        (await instance.query(`SELECT count(*)::INTEGER AS n FROM ${result.table_name}`)).rows,
+      ).toEqual([{ n: 2 }]);
+    expect(
+      (
+        await instance.query(
+          `SELECT count(*)::INTEGER AS n FROM ${staged[0]!.table_name} a JOIN ${staged[2]!.table_name} b USING (date)`,
+        )
+      ).rows,
+    ).toEqual([{ n: 2 }]);
+  });
+
+  it.each([0, 2])(
+    'rejects unknown explicit canvases even for %s inline-fit rows',
+    async (count) => {
+      getTimeSeries.mockResolvedValueOnce({ rows: rows.slice(0, count), startDate, endDate });
+      const result = await runToolContract(fxGetTimeseries, {
+        base_currency: 'USD',
+        quote_currency: 'EUR',
+        start_date: startDate,
+        end_date: endDate,
+        canvas_id: 'abc1234567',
+      });
+      expect(result.isError).toBe(true);
+      for (const surface of [
+        JSON.stringify(result.structuredContent),
+        JSON.stringify(result.content),
+      ])
+        expect(surface).toContain('canvas_not_found');
     },
   );
 

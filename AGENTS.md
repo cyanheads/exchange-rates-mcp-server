@@ -44,6 +44,10 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ## Patterns
 
+Rates use one unfiltered EUR snapshot/range per request: divide quote leg by base leg locally without intermediate rounding (EUR = 1). Historical membership uses raw served data before inclusive clipping, including retired currencies; latest membership uses current discovery. `fx_list_currencies` and `fx://currencies` expose current discovery with `as_of` from the latest served rate date. Provenance is literally `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; never infer individual providers from v1 payloads. Currency values are trimmed and uppercased; advertised date patterns are metadata so handler-level typed date errors remain reachable.
+
+`fx_get_timeseries` computes full-range summary before delivery. Empty ranges omit summary; extrema ties use the earliest date. The arithmetic daily mean is not an accounting-policy prescription. Explicit `canvas_id` always stages, including empty/short ranges, with `rate DOUBLE`; every registration gets a unique pair-name suffix and preserves prior tables. Unknown IDs fail `canvas_not_found`, disabled explicit staging fails `canvas_unavailable`. Implicit inline results release newly acquired unused canvases; supplied canvases remain caller-owned. `fx_dataframe_query` defaults to 150 rows and clamps over-cap positive integers to 10,000 with composed clamp/truncation notices.
+
 ### Tool
 
 ```ts
@@ -66,8 +70,8 @@ export const fxGetRate = tool('fx_get_rate', {
     rate: z.number().describe('Exchange rate: units of quote per 1 unit of base.'),
     rate_date: z.string().describe('Actual date of the rate returned.'),
     date_snapped: z.boolean().describe('True when the API snapped a weekend/holiday to the prior business day.'),
-    rate_type: z.string().describe('Always "ECB reference (mid-market)".'),
-    source: z.string().describe('Always "ECB via Frankfurter".'),
+    rate_type: z.string().describe('Always "Daily rate (Frankfurter v1)".'),
+    source: z.string().describe('Always "Frankfurter v1".'),
   }),
   errors: [
     { reason: 'unsupported_currency', code: JsonRpcErrorCode.ValidationError,
@@ -109,8 +113,8 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
     base_currency: z.string().describe('The base currency code.'),
     rate_date: z.string().describe('Actual date of the rates.'),
     rates: z.record(z.string(), z.number()).describe('Map of quote currency → rate.'),
-    rate_type: z.string().describe('Always "ECB reference (mid-market)".'),
-    source: z.string().describe('Always "ECB via Frankfurter".'),
+    rate_type: z.string().describe('Always "Daily rate (Frankfurter v1)".'),
+    source: z.string().describe('Always "Frankfurter v1".'),
   }),
   async handler(params, ctx) {
     const service = getFrankfurterService();

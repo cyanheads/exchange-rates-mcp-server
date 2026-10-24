@@ -35,10 +35,11 @@ export const fxGetRates = tool('fx_get_rates', {
       ),
     date: z
       .string()
+      .meta({ pattern: '^(?:\\d{4}-\\d{2}-\\d{2}|latest)$' })
       .optional()
       .describe(
         'ISO 8601 date (YYYY-MM-DD). Omit for the latest available rate. ' +
-          'ECB data starts 1999-01-04. Future dates are not supported.',
+          'Frankfurter v1 data starts 1999-01-04. Future dates are not supported.',
       ),
     symbols: z
       .array(z.string().describe('ISO 4217 currency code to include in the response.'))
@@ -57,7 +58,7 @@ export const fxGetRates = tool('fx_get_rates', {
       .string()
       .describe(
         'Actual date of the rates. May differ from requested date on weekends/holidays — ' +
-          'ECB publishes business days only; the API silently snaps to the prior business day.',
+          'daily observations may skip non-publication days; the API silently snaps to the prior business day.',
       ),
     rates: z
       .record(z.string(), z.number())
@@ -66,15 +67,15 @@ export const fxGetRates = tool('fx_get_rates', {
       .boolean()
       .describe(
         'True when the API returned a different date than requested — ' +
-          'ECB silently snaps weekend/holiday requests to the prior business day. ' +
+          'Frankfurter v1 snaps weekend/holiday requests to the prior business day. ' +
           'Always false when date is omitted.',
       ),
     rate_type: z
       .string()
       .describe(
-        'Always "ECB reference (mid-market)" — these are reference rates, not tradeable bid/ask.',
+        'Always "Daily rate (Frankfurter v1)" — these are reference rates, not tradeable bid/ask.',
       ),
-    source: z.string().describe('Always "ECB via Frankfurter" — the upstream data provider.'),
+    source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
   }),
 
   errors: [
@@ -87,20 +88,20 @@ export const fxGetRates = tool('fx_get_rates', {
     {
       reason: 'unsupported_currency',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'base_currency or an entry in symbols is not in the ECB currency set.',
+      when: 'base_currency or an entry in symbols is not available in the current discovery or served historical data.',
       recovery: 'Call fx_list_currencies to get the list of valid currency codes.',
     },
     {
       reason: 'date_out_of_range',
       code: JsonRpcErrorCode.ValidationError,
       when: 'date is before 1999-01-04 or in the future.',
-      recovery: 'ECB data starts 1999-01-04; omit date for the latest available rate.',
+      recovery: 'Frankfurter v1 data starts 1999-01-04; omit date for the latest available rate.',
     },
     {
       reason: 'upstream_no_data',
       code: JsonRpcErrorCode.NotFound,
-      when: 'Every requested currency is supported but the ECB published no rates for this date.',
-      recovery: 'Try a more recent date — ECB history starts later for some currencies.',
+      when: 'Every requested currency is supported but the Frankfurter v1 published no rates for this date.',
+      recovery: 'Try a more recent date — Frankfurter v1 history starts later for some currencies.',
     },
   ],
 
@@ -120,7 +121,7 @@ export const fxGetRates = tool('fx_get_rates', {
       if (date < ECB_START_DATE) {
         throw ctx.fail(
           'date_out_of_range',
-          `Date ${date} is before ECB data start ${ECB_START_DATE}.`,
+          `Date ${date} is before Frankfurter v1 data start ${ECB_START_DATE}.`,
         );
       }
       const today = new Date().toISOString().slice(0, 10);
@@ -145,7 +146,7 @@ export const fxGetRates = tool('fx_get_rates', {
       if (failure?.reason === 'upstream_no_data') {
         throw ctx.fail(
           'upstream_no_data',
-          `The ECB published no ${input.base_currency} rates for ${
+          `Frankfurter v1 returned no ${input.base_currency} rates for ${
             date === 'latest' ? 'the latest business day' : date
           }.`,
         );
@@ -164,8 +165,8 @@ export const fxGetRates = tool('fx_get_rates', {
       rate_date: raw.date,
       rates: raw.rates,
       date_snapped: date !== 'latest' && raw.date !== date,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
     };
   },
 
@@ -174,7 +175,7 @@ export const fxGetRates = tool('fx_get_rates', {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([code, rate]) => `**${code}**: ${rate}`);
     const snapNote = result.date_snapped
-      ? `\n⚠️ *Requested date snapped to ${result.rate_date} (weekend/holiday — ECB publishes business days only)*`
+      ? `\n⚠️ *Requested date snapped to ${result.rate_date} (weekend/holiday — daily observations may skip non-publication days)*`
       : '';
     return [
       {

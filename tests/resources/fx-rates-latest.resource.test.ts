@@ -37,8 +37,8 @@ describe('fxRatesLatestResource', () => {
     expect(result.base_currency).toBe('USD');
     expect(result.rate_date).toBe('2024-06-04');
     expect(result.rates).toMatchObject({ EUR: 0.92, GBP: 0.79 });
-    expect(result.rate_type).toBe('ECB reference (mid-market)');
-    expect(result.source).toBe('ECB via Frankfurter');
+    expect(result.rate_type).toBe('Daily rate (Frankfurter v1)');
+    expect(result.source).toBe('Frankfurter v1');
   });
 
   it('passes base currency to service', async () => {
@@ -72,7 +72,7 @@ describe('fxRatesLatestResource', () => {
       },
     });
     expect(error.message).toBe(
-      'base_currency "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD. ' +
+      'base_currency "XYZ" is not available in this Frankfurter v1 currency set. Accepted: EUR, GBP, USD. ' +
         'Call fx_list_currencies for the full currency names.',
     );
   });

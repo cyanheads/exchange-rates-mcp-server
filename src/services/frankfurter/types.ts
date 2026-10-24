@@ -44,9 +44,9 @@ export interface ResolvedRate {
   /** The actual date of the rate (may differ from requested on weekends/holidays). */
   rateDate: string;
   /** Human-readable rate type caveat. */
-  rateType: 'ECB reference (mid-market)';
+  rateType: 'Daily rate (Frankfurter v1)';
   /** Data source attribution. */
-  source: 'ECB via Frankfurter';
+  source: 'Frankfurter v1';
 }
 
 /** A time-series row for canvas registration. Must satisfy `Record<string, unknown>` for spillover. */

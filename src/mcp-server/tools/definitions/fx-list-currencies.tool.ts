@@ -8,9 +8,7 @@ import { getFrankfurterService } from '@/services/frankfurter/frankfurter-servic
 
 export const fxListCurrencies = tool('fx_list_currencies', {
   description:
-    'List all supported ISO 4217 currency codes with their full names. ' +
-    'Call this before converting to disambiguate "dollars" (USD vs AUD vs CAD vs HKD vs SGD) ' +
-    'or to validate a user-supplied currency code. Covers the ~30 ECB reference currencies.',
+    'List currently supported ISO 4217 currency codes with full names and as_of, the latest served rate date. Use this to disambiguate dollars (USD vs AUD vs CAD). Historical availability is checked against the requested historical snapshot or range and can include retired currencies absent from current discovery.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -29,23 +27,29 @@ export const fxListCurrencies = tool('fx_list_currencies', {
       )
       .describe('All supported currencies, sorted alphabetically by code.'),
     count: z.number().describe('Total number of supported currencies.'),
-    source: z.string().describe('Always "ECB via Frankfurter" — the upstream data provider.'),
+    as_of: z
+      .string()
+      .describe(
+        'Latest served daily rate date for this current-discovery list; historical availability is checked against historical data.',
+      ),
+    source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
   }),
 
   async handler(_input, ctx) {
     const service = getFrankfurterService();
-    const currencies = await service.listCurrencies(ctx.signal);
+    const { currencies, as_of } = await service.currencyDiscovery(ctx.signal);
     ctx.log.info('Listed currencies', { count: currencies.length });
     return {
       currencies,
       count: currencies.length,
-      source: 'ECB via Frankfurter',
+      as_of,
+      source: 'Frankfurter v1',
     };
   },
 
   format: (result) => {
     const lines = [
-      `**${result.count} supported currencies** (${result.source})\n`,
+      `**${result.count} currently supported currencies** (${result.source}; as_of: ${result.as_of})\n`,
       ...result.currencies.map((c) => `**${c.code}** — ${c.name}`),
     ];
     return [{ type: 'text', text: lines.join('\n') }];

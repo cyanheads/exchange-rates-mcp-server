@@ -1,5 +1,5 @@
 /**
- * @fileoverview Frankfurter API service — wraps ECB rate data from api.frankfurter.dev.
+ * @fileoverview Frankfurter API service — wraps Frankfurter v1 rate data from api.frankfurter.dev.
  * @module services/frankfurter/frankfurter-service
  */
 
@@ -18,13 +18,13 @@ import type {
   TimeSeriesResult,
 } from './types.js';
 
-/** ECB data start date. Requests before this return 404 from Frankfurter. */
+/** Frankfurter v1 data start date. Requests before this return 404 from Frankfurter. */
 const ECB_START_DATE = '1999-01-04';
 
 /** YYYY-MM-DD shape guard — calendar validity is checked separately in {@link isIsoDate}. */
 const DATE_FORMAT_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** The ECB reference set changes at most a few times a decade — cache it for a day. */
+/** The Frankfurter v1 reference set changes at most a few times a decade — cache it for a day. */
 const CURRENCY_CACHE_TTL_MS = 86_400_000;
 
 /**
@@ -40,15 +40,6 @@ export function isIsoDate(value: string): boolean {
 /** Boundary guard for date inputs. Throws `invalid_date_format` naming the field at fault. */
 function assertDateFormat(date: string, field: string): void {
   if (!isIsoDate(date)) throw invalidDateFormat(field, date);
-}
-
-/**
- * A stand-in quote currency for a self-pair, which Frankfurter answers with a 422.
- * Any second currency reveals the days the ECB actually published for the base;
- * EUR is in the reference set for the whole ECB history, so it is the default.
- */
-function proxyQuoteFor(base: string): string {
-  return base === 'EUR' ? 'USD' : 'EUR';
 }
 
 let _service: FrankfurterService | undefined;
@@ -83,8 +74,26 @@ class FrankfurterService {
 
   /** Fetch all supported currencies as a sorted array. Served from the day-long cache. */
   async listCurrencies(signal?: AbortSignal): Promise<Currency[]> {
-    return (await this.currencies(signal)).list;
+    return (await this.currencies(signal)).list.map((currency) => ({ ...currency }));
   }
+
+  /** Current discovery with the latest served rate date, cached independently of historical data. */
+  async currencyDiscovery(
+    signal?: AbortSignal,
+  ): Promise<{ currencies: Currency[]; as_of: string }> {
+    const currencies = await this.listCurrencies(signal);
+    signal?.throwIfAborted();
+    const cached = this.discoveryDateCache;
+    if (cached && Date.now() - cached.fetchedAt <= CURRENCY_CACHE_TTL_MS) {
+      return { currencies, as_of: cached.date };
+    }
+    const raw = await this.fetchJson<FrankfurterRateResponse>('/latest?base=EUR', signal);
+    signal?.throwIfAborted();
+    this.discoveryDateCache = { date: raw.date, fetchedAt: Date.now() };
+    return { currencies, as_of: raw.date };
+  }
+
+  private discoveryDateCache?: { date: string; fetchedAt: number };
 
   /** The supported currency set, fetched once per {@link CURRENCY_CACHE_TTL_MS}. */
   private async currencies(
@@ -105,7 +114,7 @@ class FrankfurterService {
   }
 
   /**
-   * Reject currency codes outside the ECB set before they reach the URL.
+   * Reject currency codes outside the Frankfurter v1 set before they reach the URL.
    * Frankfurter answers an unknown base and an unknown symbol with the same
    * bodiless 404, so membership is the only way to name the offending input.
    * The rejection lists the sorted live set it was checked against.
@@ -116,7 +125,7 @@ class FrankfurterService {
     signal?: AbortSignal,
   ): Promise<void> {
     const { codes: supported, list } = await this.currencies(signal);
-    const unsupported = codes.filter((code) => !supported.has(code));
+    const unsupported = [...new Set(codes.filter((code) => !supported.has(code)))].sort();
     if (unsupported.length > 0) {
       throw unsupportedCurrency(
         field,
@@ -126,26 +135,31 @@ class FrankfurterService {
     }
   }
 
+  /** Historical membership is the union of raw served dates, including snapped dates before clipping. */
+  private async assertHistoricalCurrencies(
+    fields: Array<[string, string[]]>,
+    available: Set<string>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const accepted = [...available].sort();
+    const absent = fields.map(
+      ([field, codes]) => [field, codes.filter((code) => !available.has(code))] as const,
+    );
+    if (absent.every(([, codes]) => codes.length === 0)) return;
+    const current = await this.currencies(signal);
+    for (const [field, missing] of absent) {
+      const unknown = [...new Set(missing.filter((code) => !current.codes.has(code)))].sort();
+      if (unknown.length > 0) throw unsupportedCurrency(field, unknown, accepted);
+    }
+    throw upstreamNoData();
+  }
+
   // ── Rate (point-in-time) ────────────────────────────────────────────────────
 
   /**
-   * Get the exchange rate for a currency pair on a given date.
-   * Handles cross-rate triangulation through EUR automatically.
-   *
-   * Frankfurter's base must be EUR for ECB data — but it also supports
-   * arbitrary base via its own math. We just set base={upper_base} and
-   * symbols={upper_quote} and let Frankfurter handle the triangulation.
-   *
-   * A self-pair is 1 by definition and a 422 upstream, so it is quoted against a
-   * proxy currency instead — the rate is still local, but its date comes from the
-   * day the ECB actually published for the base. That keeps an identity rate's
-   * `rateDate` and `dateSnapped` telling the same story as any other pair's, and
-   * a date the ECB never published for that currency fails rather than answering
-   * with a fabricated publication date.
-   *
-   * @param base - ISO 4217 base currency code
-   * @param quote - ISO 4217 quote currency code
-   * @param date - ISO 8601 date string, or 'latest'
+   * Derive a pair from one unfiltered EUR snapshot. Both legs must exist on the
+   * served date; EUR is 1. Historical membership comes from that same snapshot,
+   * and identity pairs retain actual publication dates and missing-data failures.
    */
   async getRate(
     base: string,
@@ -153,25 +167,29 @@ class FrankfurterService {
     date: string,
     signal?: AbortSignal,
   ): Promise<ResolvedRate> {
-    const upper_base = base.toUpperCase();
-    const upper_quote = quote.toUpperCase();
+    const upper_base = base.trim().toUpperCase();
+    const upper_quote = quote.trim().toUpperCase();
     if (date !== 'latest') assertDateFormat(date, 'date');
-    await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
-    await this.assertSupportedCurrencies('quote_currency', [upper_quote], signal);
-
-    const identity = upper_base === upper_quote;
-    const quoted = identity ? proxyQuoteFor(upper_base) : upper_quote;
-
-    // Frankfurter supports arbitrary base — it triangulates through EUR internally.
-    // Single call: base={upper_base}&symbols={quoted}
+    if (date === 'latest') {
+      await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
+      await this.assertSupportedCurrencies('quote_currency', [upper_quote], signal);
+    }
     const endpoint = date === 'latest' ? '/latest' : `/${encodeURIComponent(date)}`;
-    const params = new URLSearchParams({ base: upper_base, symbols: quoted });
-    const url = `${endpoint}?${params}`;
-
-    const raw = await this.fetchJson<FrankfurterRateResponse>(url, signal);
-    const quotedRate = raw.rates[quoted];
-    if (quotedRate === undefined) throw upstreamNoData();
-    const rate = identity ? 1 : quotedRate;
+    const raw = await this.fetchJson<FrankfurterRateResponse>(`${endpoint}?base=EUR`, signal);
+    if (date !== 'latest') {
+      await this.assertHistoricalCurrencies(
+        [
+          ['base_currency', [upper_base]],
+          ['quote_currency', [upper_quote]],
+        ],
+        new Set(['EUR', ...Object.keys(raw.rates)]),
+        signal,
+      );
+    }
+    const baseLeg = upper_base === 'EUR' ? 1 : raw.rates[upper_base];
+    const quoteLeg = upper_quote === 'EUR' ? 1 : raw.rates[upper_quote];
+    if (baseLeg === undefined || quoteLeg === undefined) throw upstreamNoData();
+    const rate = quoteLeg / baseLeg;
 
     const dateSnapped = date !== 'latest' && raw.date !== date;
 
@@ -181,8 +199,8 @@ class FrankfurterService {
       rate,
       rateDate: raw.date,
       dateSnapped,
-      rateType: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rateType: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
     };
   }
 
@@ -192,9 +210,8 @@ class FrankfurterService {
    * Fetch all rates for a base currency at latest or historical date.
    * Optionally filter to a specific set of symbols.
    *
-   * A currency's rate against itself is 1 by definition, and Frankfurter rejects
-   * a request whose only symbol is the base (422 "bad currency pair"). The base
-   * is therefore stripped from the upstream `symbols` and injected locally.
+   * Rates are derived locally from the unfiltered EUR snapshot and filtered only
+   * after membership validation. The base appears only when explicitly requested.
    */
   async getRates(
     base: string,
@@ -202,31 +219,42 @@ class FrankfurterService {
     symbols?: string[],
     signal?: AbortSignal,
   ): Promise<FrankfurterRateResponse> {
-    const upper_base = base.toUpperCase();
-    const upper_symbols = symbols?.map((s) => s.toUpperCase()) ?? [];
+    const upper_base = base.trim().toUpperCase();
+    const upper_symbols = symbols?.map((s) => s.trim().toUpperCase()) ?? [];
     if (date !== 'latest') assertDateFormat(date, 'date');
-    await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
-    if (upper_symbols.length > 0)
-      await this.assertSupportedCurrencies('symbols', upper_symbols, signal);
-
-    const selfQuoted = upper_symbols.includes(upper_base);
-    const upstreamSymbols = upper_symbols.filter((code) => code !== upper_base);
-
+    if (date === 'latest') {
+      await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
+      if (upper_symbols.length > 0)
+        await this.assertSupportedCurrencies('symbols', upper_symbols, signal);
+    }
     const endpoint = date === 'latest' ? '/latest' : `/${encodeURIComponent(date)}`;
-    const params = new URLSearchParams({ base: upper_base });
-    /**
-     * When the base was the only symbol requested there is nothing left to ask
-     * for, so the filter is dropped — the unfiltered snapshot still carries the
-     * publication date the caller needs, and the rates map is rebuilt below.
-     */
-    if (upstreamSymbols.length > 0) params.set('symbols', upstreamSymbols.join(','));
-    const url = `${endpoint}?${params}`;
-    const raw = await this.fetchJson<FrankfurterRateResponse>(url, signal);
-
-    if (!selfQuoted) return raw;
+    const raw = await this.fetchJson<FrankfurterRateResponse>(`${endpoint}?base=EUR`, signal);
+    if (date !== 'latest') {
+      await this.assertHistoricalCurrencies(
+        [
+          ['base_currency', [upper_base]],
+          ['symbols', upper_symbols],
+        ],
+        new Set(['EUR', ...Object.keys(raw.rates)]),
+        signal,
+      );
+    }
+    const baseLeg = upper_base === 'EUR' ? 1 : raw.rates[upper_base];
+    if (baseLeg === undefined) throw upstreamNoData();
+    const requested =
+      upper_symbols.length > 0
+        ? upper_symbols
+        : ['EUR', ...Object.keys(raw.rates)].filter((code) => code !== upper_base);
+    const rates = Object.create(null) as Record<string, number>;
+    for (const code of requested) {
+      const leg = code === 'EUR' ? 1 : raw.rates[code];
+      if (leg === undefined) throw upstreamNoData();
+      rates[code] = leg / baseLeg;
+    }
     return {
       ...raw,
-      rates: upstreamSymbols.length > 0 ? { ...raw.rates, [upper_base]: 1 } : { [upper_base]: 1 },
+      base: upper_base,
+      rates,
     };
   }
 
@@ -242,11 +270,8 @@ class FrankfurterService {
    *   prior publication day, so the response can carry dates the caller never
    *   asked for. Those rows are dropped, which leaves an empty series whenever
    *   the window contains no publication day at all.
-   * - A self-pair (`base === quote`) is a 422 upstream. It is answered locally
-   *   with a rate of 1 on the days the ECB actually published for that currency,
-   *   read off a proxy quote rather than a hand-rolled Mon–Fri calendar — the
-   *   server has no TARGET holiday table, and per-currency gaps exist too (ISK
-   *   was suspended from the reference set for a decade).
+   * - Each row requires both EUR legs on that same served date. An identity pair
+   *   is 1 only when its currency is observed, rather than on a synthetic calendar.
    */
   async getTimeSeries(
     base: string,
@@ -255,19 +280,25 @@ class FrankfurterService {
     endDate: string,
     signal?: AbortSignal,
   ): Promise<TimeSeriesResult> {
-    const upper_base = base.toUpperCase();
-    const upper_quote = quote.toUpperCase();
+    const upper_base = base.trim().toUpperCase();
+    const upper_quote = quote.trim().toUpperCase();
     assertDateFormat(startDate, 'start_date');
     assertDateFormat(endDate, 'end_date');
-    await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
-    await this.assertSupportedCurrencies('quote_currency', [upper_quote], signal);
-
-    const identity = upper_base === upper_quote;
-    const quoted = identity ? proxyQuoteFor(upper_base) : upper_quote;
-
-    const params = new URLSearchParams({ base: upper_base, symbols: quoted });
-    const url = `/${encodeURIComponent(startDate)}..${encodeURIComponent(endDate)}?${params}`;
+    const url = `/${encodeURIComponent(startDate)}..${encodeURIComponent(endDate)}?base=EUR`;
     const raw = await this.fetchJson<FrankfurterSeriesResponse>(url, signal);
+    const available = new Set<string>();
+    for (const rates of Object.values(raw.rates)) {
+      available.add('EUR');
+      for (const code of Object.keys(rates)) available.add(code);
+    }
+    await this.assertHistoricalCurrencies(
+      [
+        ['base_currency', [upper_base]],
+        ['quote_currency', [upper_quote]],
+      ],
+      available,
+      signal,
+    );
 
     const rows: SeriesRow[] = Object.entries(raw.rates)
       .filter(([date]) => date >= startDate && date <= endDate)
@@ -276,14 +307,15 @@ class FrankfurterService {
         /**
          * A day the quoted currency is missing from is not a publication day for
          * this pair — dropping it is the only honest option, since any stand-in
-         * number would read as a real ECB rate downstream.
+         * number would read as a real Frankfurter v1 rate downstream.
          */
-        const quotedRate = rateMap[quoted];
-        if (quotedRate === undefined) return [];
+        const baseLeg = upper_base === 'EUR' ? 1 : rateMap[upper_base];
+        const quoteLeg = upper_quote === 'EUR' ? 1 : rateMap[upper_quote];
+        if (baseLeg === undefined || quoteLeg === undefined) return [];
         return [
           {
             date,
-            rate: identity ? 1 : quotedRate,
+            rate: quoteLeg / baseLeg,
             base_currency: upper_base,
             quote_currency: upper_quote,
           },
@@ -333,9 +365,8 @@ class FrankfurterService {
 
         if (!response.ok) {
           /**
-           * Currency codes are checked against the live ECB set before the request,
-           * so a 404 here means the ECB published no rates for the requested date —
-           * not an unknown currency. Both this and the 4xx codes from
+           * This unfiltered EUR request returning 404 means no served data for
+           * the requested interval. Both this and the 4xx codes from
            * `httpErrorFromResponse` classify as non-transient, so a deterministic
            * input failure is surfaced immediately instead of burning retries.
            */

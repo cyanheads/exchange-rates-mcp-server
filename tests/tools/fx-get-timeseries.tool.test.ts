@@ -79,6 +79,14 @@ describe('fx_get_timeseries', () => {
     expect(result.end_date).toBe('2024-06-04');
     expect(result.rates['2024-06-03']).toBe(0.91);
     expect(result.rate_count).toBe(2);
+    expect(result.summary).toEqual({
+      mean: 0.915,
+      min: { rate: 0.91, date: '2024-06-03' },
+      max: { rate: 0.92, date: '2024-06-04' },
+      first: { rate: 0.91, date: '2024-06-03' },
+      last: { rate: 0.92, date: '2024-06-04' },
+      change_pct: ((0.92 - 0.91) / 0.91) * 100,
+    });
     expect(result.canvas_id).toBeUndefined();
     expect(result.truncated).toBe(false);
     expect(result.next_start_date).toBeUndefined();
@@ -101,11 +109,12 @@ describe('fx_get_timeseries', () => {
     );
 
     expect(result.rates).toEqual({});
+    expect(result).not.toHaveProperty('summary');
     expect(result.rate_count).toBe(0);
     // The echoed window never leaks the prior business day the upstream snapped to.
     expect(result.start_date).toBe('2024-06-01');
     expect(result.end_date).toBe('2024-06-01');
-    expect(getEnrichment(ctx).notice).toContain('TARGET business days');
+    expect(getEnrichment(ctx).notice).toContain('Weekends');
   });
 
   it('never echoes a date outside the requested range', async () => {
@@ -165,6 +174,13 @@ describe('fx_get_timeseries', () => {
     expect(result.rate_count).toBe(3);
     expect(result.base_currency).toBe('USD');
     expect(result.quote_currency).toBe('USD');
+    expect(result.summary).toMatchObject({
+      mean: 1,
+      change_pct: 0,
+      min: { rate: 1, date: '2024-06-03' },
+      max: { rate: 1, date: '2024-06-03' },
+      last: { date: '2024-06-05' },
+    });
   });
 
   it('explains an over-threshold range that stayed inline because no canvas is configured', async () => {
@@ -243,7 +259,7 @@ describe('fx_get_timeseries', () => {
           reason: 'unsupported_currency',
           rejected_codes: ['XYZ'],
         },
-        message: `${field} "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD.`,
+        message: `${field} "XYZ" is not available in this Frankfurter v1 currency set. Accepted: EUR, GBP, USD.`,
       });
     },
   );
@@ -309,8 +325,8 @@ describe('fx_get_timeseries', () => {
       rates: { '2024-06-03': 0.91, '2024-06-04': 0.92 },
       rate_count: 2,
       truncated: false,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
       spilled: false,
     };
     const content = fxGetTimeseries.format!(result);
@@ -370,9 +386,9 @@ describe('fx_get_timeseries', () => {
     expect(result.next_start_date).toBeUndefined();
     expect(mockCanvasAcquire).toHaveBeenCalled();
     expect(canvasCore.spillover).toHaveBeenCalledOnce();
-    // Verify that the stable table name is passed to spillover (not left to auto-generate)
+    // The pair prefix and fresh suffix reach spillover rather than its default table name.
     expect(vi.mocked(canvasCore.spillover)).toHaveBeenCalledWith(
-      expect.objectContaining({ tableName: 'fx_usd_eur' }),
+      expect.objectContaining({ tableName: expect.stringMatching(/^fx_usd_eur_[a-z0-9]+$/) }),
     );
 
     /** The pointer travels with the token: both dataframe tools, in call order, plus the handle. */
@@ -407,8 +423,8 @@ describe('fx_get_timeseries', () => {
       rates: { '2023-01-02': 0.93 },
       rate_count: 400,
       truncated: true,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
       spilled: true,
       canvas_id: 'abc1234567',
       table_name: 'fx_usd_eur',
@@ -479,6 +495,15 @@ describe('fx_get_timeseries inline pagination', () => {
 
     expect(result.spilled).toBe(false);
     expect(result.rate_count).toBe(1250);
+    expect(result.summary?.mean).toBeCloseTo(1.106245, 12);
+    expect(result.summary).toMatchObject({
+      min: { rate: 1.1, date: '2018-12-31' },
+      max: { rate: 1.11249, date: '2023-10-13' },
+      first: { rate: 1.1, date: '2018-12-31' },
+      last: { rate: 1.11249, date: '2023-10-13' },
+    });
+    expect(text).toContain('1.11249 on 2023-10-13');
+    expect(text).toContain('accounting-policy');
     expect(result.truncated).toBe(true);
     expect(result.next_start_date).toBe(WEEKDAY_CALENDAR[PAGE]!.date);
     expect(Object.keys(result.rates)).toEqual(pageDates);
@@ -509,6 +534,9 @@ describe('fx_get_timeseries inline pagination', () => {
       expect(result.end_date).toBe(WEEKDAY_CALENDAR.at(-1)!.date);
       expect(notice ?? '').not.toContain('fx_dataframe');
       expect(result.truncated).toBe(result.next_start_date !== undefined);
+      expect(result.summary?.first.date).toBe(keys[0]);
+      expect(result.summary?.last.date).toBe('2023-10-13');
+      expect(result.summary?.mean).toBeCloseTo([1.106245, 1.108745, 1.111245][pages - 1]!, 12);
 
       seen.push(...keys);
       start = result.next_start_date;
@@ -521,11 +549,12 @@ describe('fx_get_timeseries inline pagination', () => {
     // One call past the last publication day: empty, untruncated, not an error.
     const pastEnd = await call('2023-10-14');
     expect(pastEnd.result.rates).toEqual({});
+    expect(pastEnd.result).not.toHaveProperty('summary');
     expect(pastEnd.result.rate_count).toBe(0);
     expect(pastEnd.result.truncated).toBe(false);
     expect(pastEnd.result.next_start_date).toBeUndefined();
     expect(pastEnd.text).toContain('truncated: false');
-    expect(pastEnd.notice).toContain('TARGET business days');
+    expect(pastEnd.notice).toContain('Weekends');
   });
 
   it('returns a final page of exactly the page size with no continuation', async () => {

@@ -67,14 +67,7 @@ await createApp({
   prompts: [],
 
   instructions:
-    'ECB reference FX rates via Frankfurter (keyless, ~30 currencies, 1999-01-04 to present).\n' +
-    '- Rates are mid-market ECB reference rates — not tradeable bid/ask.\n' +
-    '- Use fx_list_currencies first to disambiguate "dollars" (USD/AUD/CAD/HKD/SGD).\n' +
-    '- Cross-rates (e.g. USD→JPY) are triangulated through EUR automatically.\n' +
-    '- Long time-series (>90 days) stage on DataCanvas when they exceed its inline preview budget (DuckDB, on by default);\n' +
-    '  call fx_dataframe_describe for the staged columns, then fx_dataframe_query for SQL.\n' +
-    '  Where DataCanvas is off (CANVAS_PROVIDER_TYPE=none), long ranges return inline in pages of 500\n' +
-    '  publication days (continue from next_start_date) and the dataframe tools are not listed.',
+    'Daily exchange rates from Frankfurter v1 (keyless, history from 1999-01-04). Responses identify Frankfurter v1 without asserting providers the response does not identify. Use fx_list_currencies for current discovery and its as_of date; historical availability comes from the requested historical data and includes retired codes. Cross-rates are calculated locally from same-date EUR legs without intermediate rounding. Currency values are trimmed and uppercased. Point dates accept YYYY-MM-DD or latest; range dates require YYYY-MM-DD. Time-series summaries cover the complete requested interval before paging or staging. Long ranges stage when they exceed the inline preview budget; an explicit canvas_id always requests staging. Every staged table has a unique name. Call fx_dataframe_describe, then fx_dataframe_query for SQL. With DataCanvas disabled, omit canvas_id and continue inline pages of 500 observations using next_start_date.',
 
   setup(core) {
     getServerConfig();

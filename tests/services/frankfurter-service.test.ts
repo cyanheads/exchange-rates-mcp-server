@@ -89,17 +89,168 @@ describe('getRate', () => {
   beforeEach(() => resetFrankfurterService());
   afterEach(restoreFetch);
 
+  it('derives an unrounded cross-rate from one unfiltered EUR snapshot', async () => {
+    stubFetch([
+      [/\/currencies$/, { ...CURRENCIES, KRW: 'Korean Won' }],
+      [
+        /\/2024-06-03\?/,
+        { amount: 1, base: 'EUR', date: '2024-06-03', rates: { KRW: 1493.24, USD: 1.0842 } },
+      ],
+    ]);
+    const rate = await getFrankfurterService().getRate('KRW', 'USD', '2024-06-03');
+    expect(rate.rate).toBe(0.0007260721652246123);
+    expect(requestedUrls().filter((url) => url.includes('/2024-06-03?'))).toEqual([
+      `${getServerConfig().frankfurterBaseUrl}/2024-06-03?base=EUR`,
+    ]);
+  });
+
+  it('accepts historical retired currencies and trims currency values', async () => {
+    stubFetch([
+      [/\/currencies$/, CURRENCIES],
+      [
+        /\/2005-06-01\?/,
+        { amount: 1, base: 'EUR', date: '2005-06-01', rates: { CYP: 0.58, USD: 1.22 } },
+      ],
+    ]);
+    const rate = await getFrankfurterService().getRate(' cyp ', ' eur ', '2005-06-01');
+    expect(rate).toMatchObject({
+      baseCurrency: 'CYP',
+      quoteCurrency: 'EUR',
+      rate: 1 / 0.58,
+      source: 'Frankfurter v1',
+      rateType: 'Daily rate (Frankfurter v1)',
+    });
+  });
+
+  it('derives bulk filtered and unfiltered historical snapshots consistently', async () => {
+    stubFetch([
+      [
+        /\/2005-06-01\?/,
+        { amount: 1, base: 'EUR', date: '2005-06-01', rates: { CYP: 0.58, USD: 1.22 } },
+      ],
+    ]);
+    const service = getFrankfurterService();
+    expect((await service.getRates('EUR', '2005-06-01')).rates).toEqual({ CYP: 0.58, USD: 1.22 });
+    expect(
+      (await service.getRates(' cyp ', '2005-06-01', [' eur ', 'cyp', ' usd '])).rates,
+    ).toEqual({ EUR: 1 / 0.58, CYP: 1, USD: 1.22 / 0.58 });
+    expect(requestedUrls()).toHaveLength(2);
+    expect(requestedUrls().every((url) => url.endsWith('?base=EUR'))).toBe(true);
+  });
+
+  it('uses every raw served date for historical availability but emits only coexisting in-range legs', async () => {
+    stubFetch([
+      [
+        /2005-06-01\.\.2005-06-06/,
+        {
+          rates: {
+            '2005-05-31': { USD: 2, CYP: 0.6 },
+            '2005-06-01': { USD: 2 },
+            '2005-06-02': { CYP: 0.5, USD: 2 },
+            '2005-06-03': { USD: 2 },
+            '2005-06-06': { USD: 2 },
+          },
+        },
+      ],
+    ]);
+    const result = await getFrankfurterService().getTimeSeries(
+      'CYP',
+      'USD',
+      '2005-06-01',
+      '2005-06-06',
+    );
+    expect(result.rows).toEqual([
+      { date: '2005-06-02', rate: 4, base_currency: 'CYP', quote_currency: 'USD' },
+    ]);
+    expect(requestedUrls()).toHaveLength(1);
+  });
+
+  it.each(['USD', 'CYP'])(
+    'preserves real publication dates for historical %s identities',
+    async (code) => {
+      stubFetch([
+        [
+          /2005-06-01\.\.2005-06-03/,
+          {
+            rates: {
+              '2005-06-01': { USD: 2 },
+              '2005-06-02': { CYP: 0.5 },
+              '2005-06-03': { USD: 2, CYP: 0.6 },
+            },
+          },
+        ],
+      ]);
+      const result = await getFrankfurterService().getTimeSeries(
+        code,
+        code,
+        '2005-06-01',
+        '2005-06-03',
+      );
+      expect(result.rows.map((row) => [row.date, row.rate])).toEqual(
+        code === 'USD'
+          ? [
+              ['2005-06-01', 1],
+              ['2005-06-03', 1],
+            ]
+          : [
+              ['2005-06-02', 1],
+              ['2005-06-03', 1],
+            ],
+      );
+    },
+  );
+
+  it('distinguishes a current currency with missing observations from an unknown historical code', async () => {
+    stubFetch([
+      [/\/currencies$/, CURRENCIES],
+      [/\/2005-06-01\?/, { amount: 1, base: 'EUR', date: '2005-06-01', rates: { CYP: 0.58 } }],
+    ]);
+    await expect(getFrankfurterService().getRate('USD', 'EUR', '2005-06-01')).rejects.toMatchObject(
+      { data: { reason: 'upstream_no_data' } },
+    );
+    await expect(
+      getFrankfurterService().getRates('EUR', '2005-06-01', ['zzz', 'aaa']),
+    ).rejects.toMatchObject({
+      data: {
+        field: 'symbols',
+        reason: 'unsupported_currency',
+        accepted_codes: ['CYP', 'EUR'],
+        rejected_codes: ['AAA', 'ZZZ'],
+      },
+    });
+  });
+
+  it('keeps current discovery dated and immune to caller mutation', async () => {
+    stubFetch([
+      [/\/currencies$/, CURRENCIES],
+      [/\/latest\?/, { date: '2024-06-03', base: 'EUR', amount: 1, rates: { USD: 1.0842 } }],
+    ]);
+    const service = getFrankfurterService();
+    const first = await service.currencyDiscovery();
+    first.currencies[0]!.code = 'MUTATED';
+    first.currencies.length = 1;
+    expect(await service.currencyDiscovery()).toEqual({
+      currencies: [
+        { code: 'EUR', name: 'Euro' },
+        { code: 'GBP', name: 'British Pound' },
+        { code: 'USD', name: 'US Dollar' },
+      ],
+      as_of: '2024-06-03',
+    });
+    expect(requestedUrls()).toHaveLength(2);
+  });
+
   it('dates an identity rate to the ECB publication day, flagging the snap like any other pair', async () => {
     stubFetch([
       [/\/currencies$/, CURRENCIES],
       // Saturday request; Frankfurter answers with Friday's fix.
-      [/\/2024-06-01\?/, { amount: 1, base: 'USD', date: '2024-05-31', rates: { EUR: 0.92149 } }],
+      [/\/2024-06-01\?/, { amount: 1, base: 'EUR', date: '2024-05-31', rates: { USD: 1.0852 } }],
     ]);
 
     const result = await getFrankfurterService().getRate('usd', 'usd', '2024-06-01');
 
     // The self-pair never reaches the API — USD is quoted against EUR instead.
-    expect(requestedUrls().some((url) => url.includes('symbols=EUR'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('base=EUR'))).toBe(true);
     expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(false);
     expect(result).toMatchObject({ rate: 1, rateDate: '2024-05-31', dateSnapped: true });
   });
@@ -112,7 +263,7 @@ describe('getRate', () => {
 
     const result = await getFrankfurterService().getRate('EUR', 'EUR', 'latest');
 
-    expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('base=EUR'))).toBe(true);
     expect(result).toMatchObject({ rate: 1, rateDate: '2024-06-04', dateSnapped: false });
   });
 
@@ -145,9 +296,9 @@ describe('getTimeSeries', () => {
           start_date: '2024-05-31',
           end_date: '2024-06-05',
           rates: {
-            '2024-05-31': { EUR: 0.92149 },
-            '2024-06-03': { EUR: 0.91 },
-            '2024-06-05': { EUR: 0.93 },
+            '2024-05-31': { USD: 1.0852 },
+            '2024-06-03': { USD: 1.1 },
+            '2024-06-05': { USD: 1.09 },
           },
         },
       ],
@@ -175,7 +326,7 @@ describe('getTimeSeries', () => {
           base: 'USD',
           start_date: '2024-05-31',
           end_date: '2024-05-31',
-          rates: { '2024-05-31': { EUR: 0.92149 } },
+          rates: { '2024-05-31': { USD: 1.0852 } },
         },
       ],
     ]);
@@ -203,9 +354,9 @@ describe('getTimeSeries', () => {
           start_date: '2024-06-03',
           end_date: '2024-06-05',
           rates: {
-            '2024-06-03': { EUR: 0.91 },
-            '2024-06-04': { EUR: 0.92 },
-            '2024-06-05': { EUR: 0.93 },
+            '2024-06-03': { USD: 1.1 },
+            '2024-06-04': { USD: 1.08 },
+            '2024-06-05': { USD: 1.09 },
           },
         },
       ],
@@ -219,7 +370,7 @@ describe('getTimeSeries', () => {
     );
 
     // The self-pair never reaches the API — USD is quoted against EUR instead.
-    expect(requestedUrls().some((url) => url.includes('symbols=EUR'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('base=EUR'))).toBe(true);
     expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(false);
     expect(result.rows).toEqual([
       { date: '2024-06-03', rate: 1, base_currency: 'USD', quote_currency: 'USD' },
@@ -250,7 +401,7 @@ describe('getTimeSeries', () => {
       '2024-06-03',
     );
 
-    expect(requestedUrls().some((url) => url.includes('symbols=USD'))).toBe(true);
+    expect(requestedUrls().some((url) => url.includes('base=EUR'))).toBe(true);
     expect(result.rows).toEqual([
       { date: '2024-06-03', rate: 1, base_currency: 'EUR', quote_currency: 'EUR' },
     ]);
@@ -261,9 +412,9 @@ describe('getRates', () => {
   beforeEach(() => resetFrankfurterService());
   afterEach(restoreFetch);
 
-  const snapshot = { amount: 1, base: 'USD', date: '2024-06-04', rates: { EUR: 0.92, GBP: 0.79 } };
+  const snapshot = { amount: 1, base: 'EUR', date: '2024-06-04', rates: { USD: 2, GBP: 1.58 } };
 
-  it('strips the base from the upstream symbols and injects its identity rate', async () => {
+  it('derives the requested quotes and identity from an unfiltered EUR snapshot', async () => {
     stubFetch([
       [/\/currencies$/, CURRENCIES],
       [/\/latest\?/, snapshot],
@@ -272,9 +423,10 @@ describe('getRates', () => {
     const result = await getFrankfurterService().getRates('USD', 'latest', ['USD', 'EUR', 'GBP']);
 
     const dataCall = requestedUrls().find((url) => url.includes('/latest?')) ?? '';
-    expect(decodeURIComponent(dataCall)).toContain('symbols=EUR,GBP');
+    expect(decodeURIComponent(dataCall)).toContain('base=EUR');
+    expect(dataCall).not.toContain('symbols=');
     expect(decodeURIComponent(dataCall)).not.toContain('USD,');
-    expect(result.rates).toEqual({ EUR: 0.92, GBP: 0.79, USD: 1 });
+    expect(result.rates).toEqual({ EUR: 0.5, GBP: 0.79, USD: 1 });
   });
 
   it('returns just the identity rate when the base is the only symbol requested', async () => {
@@ -300,7 +452,7 @@ describe('getRates', () => {
 
     const result = await getFrankfurterService().getRates('USD', 'latest', ['EUR']);
 
-    expect(result.rates).toEqual({ EUR: 0.92, GBP: 0.79 });
+    expect(result.rates).toEqual({ EUR: 0.5 });
   });
 });
 
@@ -399,7 +551,8 @@ describe('unsupported currency rejection', () => {
     const rejection = getFrankfurterService().getRate('ars', 'USD', 'latest');
 
     await expect(rejection).rejects.toMatchObject({
-      message: 'base_currency "ARS" is not supported by the ECB. Accepted: EUR, GBP, USD.',
+      message:
+        'base_currency "ARS" is not available in this Frankfurter v1 currency set. Accepted: EUR, GBP, USD.',
       data: {
         accepted_codes: ACCEPTED,
         field: 'base_currency',
@@ -411,7 +564,13 @@ describe('unsupported currency rejection', () => {
   });
 
   it('lists the accepted set once for several rejected symbols, blaming symbols alone', async () => {
-    stubFetch([[/\/currencies$/, CURRENCIES]]);
+    stubFetch([
+      [/\/currencies$/, CURRENCIES],
+      [
+        /\/2024-06-03\?/,
+        { amount: 1, base: 'EUR', date: '2024-06-03', rates: { USD: 1.1, GBP: 0.85 } },
+      ],
+    ]);
 
     const error = await getFrankfurterService()
       .getRates('USD', '2024-06-03', ['ars', 'EUR', 'vnd'])
@@ -421,7 +580,7 @@ describe('unsupported currency rejection', () => {
       );
 
     expect(error.message).toBe(
-      'symbols contains codes not supported by the ECB: ARS, VND. Accepted: EUR, GBP, USD.',
+      'symbols contains codes outside this Frankfurter v1 currency set: ARS, VND. Accepted: EUR, GBP, USD.',
     );
     expect(error.message.split('Accepted:')).toHaveLength(2);
     expect(error.data).toMatchObject({
@@ -432,12 +591,16 @@ describe('unsupported currency rejection', () => {
   });
 
   it('carries the accepted set on a rejected quote in a time series', async () => {
-    stubFetch([[/\/currencies$/, CURRENCIES]]);
+    stubFetch([
+      [/\/currencies$/, CURRENCIES],
+      [/2024-06-03\.\.2024-06-05/, { rates: { '2024-06-03': { USD: 1.1, GBP: 0.85 } } }],
+    ]);
 
     await expect(
       getFrankfurterService().getTimeSeries('USD', 'TWD', '2024-06-03', '2024-06-05'),
     ).rejects.toMatchObject({
-      message: 'quote_currency "TWD" is not supported by the ECB. Accepted: EUR, GBP, USD.',
+      message:
+        'quote_currency "TWD" is not available in this Frankfurter v1 currency set. Accepted: EUR, GBP, USD.',
       data: { accepted_codes: ACCEPTED, field: 'quote_currency', rejected_codes: ['TWD'] },
     });
   });

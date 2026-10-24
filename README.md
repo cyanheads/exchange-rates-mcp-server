@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/exchange-rates-mcp-server</h1>
-  <p><b>Convert currencies, get FX rates, and query historical ECB exchange rate data via MCP. STDIO or Streamable HTTP.</b>
+  <p><b>Convert currencies, get FX rates, and query historical Frankfurter v1 exchange rate data via MCP. STDIO or Streamable HTTP.</b>
   <div>7 Tools • 1 Opt-in Tool • 2 Resources</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.5.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.5.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,13 +29,13 @@
 
 ## Overview
 
-ECB reference exchange rates via Frankfurter, covering ~30 currencies back to 1999. Convert amounts, disambiguate currency codes, pull point-in-time or historical rates, and run SQL over long time series. No API key required.
+Daily exchange rates from Frankfurter v1, with current currency discovery and historical coverage from 1999-01-04. Convert amounts, pull point-in-time or historical rates, summarize a full date range, and run SQL over staged series. Historical availability includes retired currencies and is checked against the requested data. Responses identify `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; the v1 payload does not identify individual providers. No API key required.
 
 ### Tools
 
 | Tool | Description |
 |:---|:---|
-| `fx_list_currencies` | List all ~30 ECB-supported ISO 4217 currencies with full names |
+| `fx_list_currencies` | Current currency discovery with full names and the latest served rate date |
 | `fx_get_rates` | Snapshot of all rates for a base currency at latest or a historical date |
 | `fx_get_rate` | Exchange rate for a single currency pair at latest or a historical date |
 | `fx_convert_currency` | Convert an amount between two currencies at latest or a historical rate |
@@ -47,6 +47,8 @@ ECB reference exchange rates via Frankfurter, covering ~30 currencies back to 19
 DataCanvas (DuckDB) is on by default. Set `CANVAS_PROVIDER_TYPE=none` to turn it off: the three `fx_dataframe_*` tools then drop out of `tools/list`, and `fx_get_timeseries` returns every range inline. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native binding, so it runs with DataCanvas off. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
 
 The four rate and conversion tools accept `base` as an alias of `base_currency`; pair tools also accept `quote` for `quote_currency`. Send either spelling for a field, never both. Advertised schemas use the canonical names.
+
+Currency values, including `symbols`, are trimmed and uppercased. Point dates accept `YYYY-MM-DD` or literal `latest` (also the default); range dates require `YYYY-MM-DD`. Advertised date patterns preserve handler-level `invalid_date_format` errors for malformed, blank or impossible calendar dates. Future range errors recommend an `end_date` today or earlier; `end_date` remains required.
 
 ### Resources
 
@@ -64,14 +66,14 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 ### `fx_list_currencies` <sub>tool</sub>
 
 - No input parameters
-- Returns `[{ code, name }]` for all ~30 ECB-scoped currencies, sorted alphabetically by code
-- ECB coverage shifts as currencies enter or exit scope — call this to validate a user-supplied code rather than hard-coding a list
+- Returns `currencies: [{ code, name }]`, `count`, `source` and `as_of` (the latest served daily rate date), sorted alphabetically by code
+- This is current discovery. Historical requests validate against their unfiltered EUR snapshot or raw served range, so retired codes remain usable on dates where they have observations. Unknown codes fail `unsupported_currency` with sorted accepted/rejected codes and the input field; current currencies without historical observations fail `upstream_no_data`.
 
 ---
 
 ### `fx_get_rates` <sub>tool</sub>
 
-- `base_currency` required; `date` optional (default latest, ECB data from 1999-01-04, no future dates); optional `symbols` array narrows the response and must name at least one code
+- `base_currency` required; `date` optional (default latest, history from 1999-01-04, no future dates); optional `symbols` array narrows the response and must name at least one code
 - Returns a `rates` map (quote code → rate), the actual `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
 - Naming the base currency in `symbols` is valid — answered locally with a rate of 1 rather than sent upstream
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
@@ -80,16 +82,16 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx_get_rate` <sub>tool</sub>
 
-- `base_currency`, `quote_currency` required; `date` optional (default latest, ECB data from 1999-01-04, no future dates)
+- `base_currency`, `quote_currency` required; `date` optional (default latest, history from 1999-01-04, no future dates)
 - Returns `rate`, `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
-- Cross-rates (neither side EUR) triangulate through EUR in one upstream rate call; a same-currency pair returns 1, with its publication date obtained from an upstream proxy quote
+- Every pair uses quote EUR leg / base EUR leg from one unfiltered EUR snapshot without intermediate rounding; EUR's leg is 1. Same-currency pairs return 1 only on actual observation dates.
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
 
 ### `fx_convert_currency` <sub>tool</sub>
 
-- `base_currency`, `quote_currency`, `amount` (must be > 0) required; `date` optional (default latest, ECB data from 1999-01-04, no future dates)
+- `base_currency`, `quote_currency`, `amount` (must be > 0) required; `date` optional (default latest, history from 1999-01-04, no future dates)
 - Handles EUR↔any, any↔EUR, and cross-rate pairs (e.g. USD→JPY) in a single upstream call
 - Returns `quote_amount` (rounded to 6 decimal places), `rate`, `rate_date`, `date_snapped`, plus `rate_type` and `source` provenance
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
@@ -98,12 +100,14 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx_get_timeseries` <sub>tool</sub>
 
-- `base_currency`, `quote_currency`, `start_date`, `end_date` required (ECB data from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
+- `base_currency`, `quote_currency`, `start_date`, `end_date` required (history from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
 - Inline results page at 500 publication days — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
 - Ranges over `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` (default 90 days) are considered for DataCanvas staging. Series over the 40,000-character preview budget return `spilled: true`, `canvas_id`, and `table_name`; smaller series and deployments with `CANVAS_PROVIDER_TYPE=none` page inline
-- A same-currency pair returns a rate of 1 on each real ECB publication day in range, not a synthetic Mon–Fri loop
+- A same-currency pair returns 1 on actual observation dates. Every non-identity row requires both EUR legs on that same date; missing legs never fabricate observations. Membership uses all raw served dates before inclusive clipping, preserving weekend-only empty windows.
 - An empty range (only weekends/holidays) returns `rate_count: 0` with an explanatory `notice`, distinguishable from an error
 - Long ranges that fit the inline preview release their newly acquired canvas; failed or cancelled staging does too. A supplied canvas remains available.
+- An explicit `canvas_id` always stages the complete result, including short and empty ranges, using `rate DOUBLE`. Each table name has a fresh identifier suffix; repeated and concurrent calls preserve all earlier tables. Unknown IDs fail `canvas_not_found`; disabled DataCanvas fails `canvas_unavailable`. `truncated` is false when the preview includes every observation.
+- Nonempty results include `summary: { mean, min: { rate, date }, max: { rate, date }, first: { rate, date }, last: { rate, date }, change_pct }`. It covers all observations in the requested interval before paging or staging; a continuation summarizes its shorter requested interval. Tied extrema select the earliest date; singleton and identity movement is 0. Empty series omit summary. Mean is the unweighted arithmetic average of daily observations, not a tax-authority or accounting-policy prescription.
 
 ---
 
@@ -118,7 +122,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx_dataframe_query` <sub>tool</sub>
 
-- `canvas_id` and a read-only SQL `query` required; `row_limit` optional (1–10,000, default 150)
+- `canvas_id` and a read-only SQL `query` required; `row_limit` is a positive integer (default 150). Values above 10,000 clamp to 10,000 with requested/effective values in a notice; clamping and truncation notices coexist and paging guidance uses the effective limit.
 - Supports aggregations, GROUP BY, window functions, and JOINs across tables from multiple `fx_get_timeseries` calls
 - Returns at most `row_limit` rows; `truncated: true` plus a `notice` give the `ORDER BY <column> LIMIT <n> OFFSET <m>` shape for the next page — ORDER BY is required for stable paging
 - Markdown table cells are escaped so pipes, angle brackets, and line breaks stay inside their cell; `structuredContent` keeps raw values
@@ -129,7 +133,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 ### `fx_dataframe_drop` <sub>tool</sub>
 
 - `canvas_id` and exact `table_name` (from `fx_dataframe_describe`) required
-- Removes one staged table or view; ECB rate data is untouched and the series can be re-staged via `fx_get_timeseries`
+- Removes one staged table or view; upstream rate data is untouched and the series can be re-staged via `fx_get_timeseries`
 - Returns `dropped: true`/`false` depending on whether the table existed
 - Disabled unless `FX_ENABLE_CANVAS_DROP=true` — otherwise absent from `tools/list`, named with its enable hint only in the startup log and the HTTP landing page; also unregistered when `CANVAS_PROVIDER_TYPE=none`
 
@@ -137,7 +141,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx://currencies` <sub>resource</sub>
 
-- No parameters; returns `currencies`, `count`, `source` as `application/json` — the same payload as `fx_list_currencies`
+- No parameters; returns current discovery with `currencies`, `count`, `source`, `as_of` as `application/json` — the same payload as `fx_list_currencies`
 - Listed as a single static resource
 
 ---
@@ -145,19 +149,19 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 ### `fx://rates/latest/{base}` <sub>resource</sub>
 
 - `base` is an ISO 4217 currency code in the URI
-- Returns `base_currency`, `rate_date`, a `rates` map, `rate_type`, and `source` for the latest ECB fix
+- Returns `base_currency`, `rate_date`, a `rates` map, `rate_type`, and `source` for the latest served daily snapshot
 - Listed with four sample URIs (EUR, USD, GBP, JPY) as discovery hints
 
 ## Features
 
 Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
-ECB-specific:
+Rate data:
 
-- Keyless access via [Frankfurter](https://www.frankfurter.dev/) — a Cloudflare-fronted ECB proxy; no API keys required
-- Cross-rate triangulation: any pair works — USD → JPY is one upstream call, cross-rated through EUR on Frankfurter's side
+- Keyless daily data via [Frankfurter v1](https://www.frankfurter.dev/v1/)
+- Local cross-rate calculation from one unfiltered EUR data request per snapshot or range; the same response supplies historical membership
 - Weekend/holiday date semantics: `date_snapped` surfaces when the API returns a different date than requested
-- Identity rates are computed locally as 1; an upstream proxy quote supplies the actual publication dates for that currency
+- Identity rates are computed locally as 1 on the currency's observed publication dates
 - Long time-series that exceed the inline preview budget stage on DataCanvas (DuckDB, on by default) for SQL aggregation over the full range
 
 Agent-friendly output:
@@ -383,7 +387,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 - Use `ctx.log` for request-scoped logging, `ctx.state` for tenant-scoped storage
 - Register new tools and resources via the barrels in `src/mcp-server/*/definitions/index.ts`
 - Wrap external API calls: validate raw → normalize to domain type → return output schema; never fabricate missing fields
-- ECB rates are mid-market reference rates — preserve the `rate_type` provenance in every response
+- Preserve the `rate_type: "Daily rate (Frankfurter v1)"` and `source: "Frankfurter v1"` provenance in every response
 
 ---
 

@@ -101,3 +101,28 @@ describe('output and enrichment field names', () => {
     },
   );
 });
+
+describe('advertised date shapes with typed handler validation', () => {
+  it.each([fxGetRate, fxGetRates, fxConvertCurrency])(
+    '%s advertises calendar dates and latest without Zod shape rejection',
+    (tool) => {
+      const schema = z.toJSONSchema(tool.input);
+      const pattern = (schema.properties!.date as { pattern: string }).pattern;
+      expect(pattern).toBe('^(?:\\d{4}-\\d{2}-\\d{2}|latest)$');
+      expect(new RegExp(pattern).test('latest')).toBe(true);
+      expect(
+        tool.input.safeParse({
+          base_currency: 'USD',
+          ...(tool !== fxGetRates && { quote_currency: 'EUR' }),
+          ...(tool === fxConvertCurrency && { amount: 1 }),
+          date: '2024-6-1',
+        }).success,
+      ).toBe(true);
+    },
+  );
+  it('advertises only date shapes on required range dates', () => {
+    const schema = z.toJSONSchema(fxGetTimeseries.input);
+    for (const field of ['start_date', 'end_date'])
+      expect(schema.properties![field]).toMatchObject({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
+  });
+});

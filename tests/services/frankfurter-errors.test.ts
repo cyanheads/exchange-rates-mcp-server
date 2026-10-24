@@ -63,7 +63,9 @@ describe('frankfurter failures', () => {
     const error = unsupportedCurrency('base_currency', ['ARS'], ACCEPTED);
 
     expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
-    expect(error.message).toBe(`base_currency "ARS" is not supported by the ECB. ${ACCEPTED_TEXT}`);
+    expect(error.message).toBe(
+      `base_currency "ARS" is not available in this Frankfurter v1 currency set. ${ACCEPTED_TEXT}`,
+    );
     expect(error.data).toEqual({
       accepted_codes: ACCEPTED,
       field: 'base_currency',
@@ -76,7 +78,7 @@ describe('frankfurter failures', () => {
     const error = unsupportedCurrency('symbols', ['ARS', 'VND'], ACCEPTED);
 
     expect(error.message).toBe(
-      `symbols contains codes not supported by the ECB: ARS, VND. ${ACCEPTED_TEXT}`,
+      `symbols contains codes outside this Frankfurter v1 currency set: ARS, VND. ${ACCEPTED_TEXT}`,
     );
     expect(error.message.split('Accepted:')).toHaveLength(2);
     expect(error.data).toMatchObject({ accepted_codes: ACCEPTED, rejected_codes: ['ARS', 'VND'] });

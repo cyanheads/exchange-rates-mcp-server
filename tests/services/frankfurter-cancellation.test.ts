@@ -141,7 +141,8 @@ describe('Frankfurter cancellation', () => {
       const caller = new AbortController();
       const reason = new Error('cancel later attempt');
       install((request, attempt) => {
-        if (attempt === 1) return Response.json(currencies);
+        if (request.url.endsWith('/currencies')) return Response.json(currencies);
+        if (method === 'series' && attempt === 1) return new Response('busy', { status: 503 });
         if (attempt === 2) return new Response('busy', { status: 503 });
         caller.abort(reason);
         request.signal.throwIfAborted();
@@ -158,7 +159,7 @@ describe('Frankfurter cancellation', () => {
       expect(requests).toHaveLength(3);
       expect(requests[2]!.signal.aborted).toBe(true);
       expect(await service.listCurrencies()).toHaveLength(2);
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(method === 'series' ? 4 : 3);
       await expect(service.listCurrencies(caller.signal)).rejects.toBe(reason);
     },
   );

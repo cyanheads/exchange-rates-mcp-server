@@ -10,7 +10,7 @@ import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 
 const mockListCurrencies = vi.fn();
 vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
-  listCurrencies: mockListCurrencies,
+  currencyDiscovery: async () => ({ currencies: await mockListCurrencies(), as_of: '2024-06-03' }),
 } as unknown as ReturnType<typeof serviceModule.getFrankfurterService>);
 
 describe('fx_list_currencies', () => {
@@ -29,7 +29,8 @@ describe('fx_list_currencies', () => {
 
     expect(result.currencies).toHaveLength(3);
     expect(result.count).toBe(3);
-    expect(result.source).toBe('ECB via Frankfurter');
+    expect(result.as_of).toBe('2024-06-03');
+    expect(result.source).toBe('Frankfurter v1');
     expect(result.currencies[0]).toMatchObject({ code: 'EUR', name: 'Euro' });
   });
 
@@ -40,7 +41,8 @@ describe('fx_list_currencies', () => {
         { code: 'USD', name: 'United States Dollar' },
       ],
       count: 2,
-      source: 'ECB via Frankfurter',
+      as_of: '2024-06-03',
+      source: 'Frankfurter v1',
     };
     const content = fxListCurrencies.format!(result);
     const text = (content[0] as { text: string }).text;
@@ -48,5 +50,6 @@ describe('fx_list_currencies', () => {
     expect(text).toContain('USD');
     expect(text).toContain('Euro');
     expect(text).toContain('2');
+    expect(text).toContain('2024-06-03');
   });
 });

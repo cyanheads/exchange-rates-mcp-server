@@ -9,7 +9,7 @@ import { getFrankfurterService } from '@/services/frankfurter/frankfurter-servic
 export const fxCurrenciesResource = resource('fx://currencies', {
   name: 'fx-currencies',
   description:
-    'All supported ISO 4217 currency codes with full names. Covers the ~30 ECB reference currencies.',
+    'Current Frankfurter v1 currency discovery with full names and the latest served rate date as_of. Historical availability is checked against historical data, including retired currencies.',
   mimeType: 'application/json',
   params: z.object({}),
   output: z.object({
@@ -24,14 +24,19 @@ export const fxCurrenciesResource = resource('fx://currencies', {
       )
       .describe('All supported currencies, sorted alphabetically by code.'),
     count: z.number().describe('Total number of supported currencies.'),
-    source: z.string().describe('Always "ECB via Frankfurter" — the upstream data provider.'),
+    as_of: z
+      .string()
+      .describe(
+        'Latest served rate date for current discovery; historical availability is checked against historical data.',
+      ),
+    source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
   }),
 
   async handler(_params, ctx) {
     const service = getFrankfurterService();
-    const currencies = await service.listCurrencies(ctx.signal);
+    const { currencies, as_of } = await service.currencyDiscovery(ctx.signal);
     ctx.log.info('Fetched currencies resource', { count: currencies.length });
-    return { currencies, count: currencies.length, source: 'ECB via Frankfurter' };
+    return { currencies, count: currencies.length, as_of, source: 'Frankfurter v1' };
   },
 
   list: () => ({
@@ -40,7 +45,7 @@ export const fxCurrenciesResource = resource('fx://currencies', {
         uri: 'fx://currencies',
         name: 'Supported Currencies',
         mimeType: 'application/json',
-        description: 'All ISO 4217 currency codes supported by ECB/Frankfurter.',
+        description: 'Current Frankfurter v1 currency discovery with the latest served rate date.',
       },
     ],
   }),

@@ -24,8 +24,8 @@ const baseResolvedRate: ResolvedRate = {
   rate: 0.92,
   rateDate: '2024-06-04',
   dateSnapped: false,
-  rateType: 'ECB reference (mid-market)',
-  source: 'ECB via Frankfurter',
+  rateType: 'Daily rate (Frankfurter v1)',
+  source: 'Frankfurter v1',
 };
 
 describe('fx_get_rate', () => {
@@ -43,8 +43,8 @@ describe('fx_get_rate', () => {
     expect(result.rate).toBe(0.92);
     expect(result.rate_date).toBe('2024-06-04');
     expect(result.date_snapped).toBe(false);
-    expect(result.rate_type).toBe('ECB reference (mid-market)');
-    expect(result.source).toBe('ECB via Frankfurter');
+    expect(result.rate_type).toBe('Daily rate (Frankfurter v1)');
+    expect(result.source).toBe('Frankfurter v1');
   });
 
   it('surfaces date_snapped when API returns a different date', async () => {
@@ -91,7 +91,7 @@ describe('fx_get_rate', () => {
           reason: 'unsupported_currency',
           rejected_codes: ['XYZ'],
         },
-        message: `${field} "XYZ" is not supported by the ECB. Accepted: EUR, GBP, USD.`,
+        message: `${field} "XYZ" is not available in this Frankfurter v1 currency set. Accepted: EUR, GBP, USD.`,
       });
     },
   );
@@ -138,8 +138,8 @@ describe('fx_get_rate', () => {
       rate: 0.92,
       rate_date: '2024-06-04',
       date_snapped: false,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
     };
     const content = fxGetRate.format!(output);
     const text = (content[0] as { text: string }).text;
@@ -155,8 +155,8 @@ describe('fx_get_rate', () => {
       rate: 0.92,
       rate_date: '2024-05-31',
       date_snapped: true,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
     };
     const content = fxGetRate.format!(output);
     const text = (content[0] as { text: string }).text;

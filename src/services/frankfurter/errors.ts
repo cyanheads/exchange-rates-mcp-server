@@ -39,18 +39,15 @@ export function invalidDateFormat(field: string, value: string): McpError {
 
 /** The code lists an `unsupported_currency` failure carries on `McpError.data`. */
 export interface UnsupportedCurrencyCodes {
-  /** The live ECB reference set the request was checked against, sorted. */
+  /** The current or historical served currency set the request was checked against, sorted. */
   accepted_codes: string[];
   /** The requested codes outside that set. */
   rejected_codes: string[];
 }
 
 /**
- * One or more currency codes outside the ECB reference set. Codes are checked
- * against the live currency list before the request, because Frankfurter's 404
- * body carries no field attribution. The accepted set is appended once, however
- * many codes were rejected, so the caller can correct the request without a
- * second call.
+ * Currency codes outside the current discovery or historical served set.
+ * The accepted set is appended once so callers can correct the request directly.
  */
 export function unsupportedCurrency(
   field: string,
@@ -59,8 +56,8 @@ export function unsupportedCurrency(
 ): McpError {
   const rejection =
     rejected.length === 1
-      ? `${field} "${rejected[0]}" is not supported by the ECB.`
-      : `${field} contains codes not supported by the ECB: ${rejected.join(', ')}.`;
+      ? `${field} "${rejected[0]}" is not available in this Frankfurter v1 currency set.`
+      : `${field} contains codes outside this Frankfurter v1 currency set: ${rejected.join(', ')}.`;
   return validationError(`${rejection} Accepted: ${accepted.join(', ')}.`, {
     accepted_codes: accepted,
     field,
@@ -70,9 +67,9 @@ export function unsupportedCurrency(
 }
 
 /**
- * The ECB published no rates for an otherwise well-formed request — most often a
+ * Frankfurter v1 returned no rates for an otherwise well-formed request — most often a
  * date that predates the requested currency's series (ILS and BRL start well after
- * the 1999-01-04 ECB epoch).
+ * the 1999-01-04 Frankfurter v1 epoch).
  *
  * The upstream request URL is deliberately absent: `McpError.data` reaches the
  * client as `structuredContent.error.data`, and the URL carries both the caller's
@@ -80,7 +77,7 @@ export function unsupportedCurrency(
  * message naming the pair and dates it asked for, which is the part a caller can act on.
  */
 export function upstreamNoData(): McpError {
-  return notFound('The ECB published no rates for this request.', {
+  return notFound('Frankfurter v1 returned no rates for this request.', {
     reason: 'upstream_no_data',
   });
 }

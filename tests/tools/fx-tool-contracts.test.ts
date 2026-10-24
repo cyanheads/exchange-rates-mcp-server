@@ -100,8 +100,8 @@ const snappedRate: ResolvedRate = {
   rate: 0.92149,
   rateDate: '2024-05-31',
   dateSnapped: true,
-  rateType: 'ECB reference (mid-market)',
-  source: 'ECB via Frankfurter',
+  rateType: 'Daily rate (Frankfurter v1)',
+  source: 'Frankfurter v1',
 };
 
 /** Reject a pair the way the service does: base checked first, then quote. */
@@ -160,7 +160,7 @@ toolContractSuite(fxGetRate, {
         /** The snap warning is the one fact a content[]-only client would otherwise lose. */
         expect(text).toContain('2024-05-31');
         expect(text).toContain('snapped');
-        expect(text).toContain('ECB reference (mid-market)');
+        expect(text).toContain('Daily rate (Frankfurter v1)');
       },
     },
   ],
@@ -195,7 +195,7 @@ toolContractSuite(fxGetRates, {
       assert: (result) => {
         const text = (result.content[0] as { text: string }).text;
         expect(text).toContain('**EUR**: 0.92');
-        expect(text).toContain('ECB reference (mid-market)');
+        expect(text).toContain('Daily rate (Frankfurter v1)');
         expect(text).not.toContain('snapped');
       },
     },

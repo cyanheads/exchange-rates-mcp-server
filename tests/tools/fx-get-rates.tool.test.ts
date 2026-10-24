@@ -41,8 +41,8 @@ describe('fx_get_rates', () => {
     expect(result.base_currency).toBe('USD');
     expect(result.rate_date).toBe('2024-06-04');
     expect(result.rates).toMatchObject({ EUR: 0.92, GBP: 0.79 });
-    expect(result.rate_type).toBe('ECB reference (mid-market)');
-    expect(result.source).toBe('ECB via Frankfurter');
+    expect(result.rate_type).toBe('Daily rate (Frankfurter v1)');
+    expect(result.source).toBe('Frankfurter v1');
   });
 
   /**
@@ -157,7 +157,8 @@ describe('fx_get_rates', () => {
     mockGetRates.mockRejectedValue(unsupportedCurrency('base_currency', ['XYZ'], ACCEPTED));
     const ctx = createMockContext({ errors: fxGetRates.errors });
     await expect(fxGetRates.handler({ base_currency: 'XYZ' }, ctx)).rejects.toMatchObject({
-      message: 'base_currency "XYZ" is not supported by the ECB. Accepted: EUR, GBP, JPY, USD.',
+      message:
+        'base_currency "XYZ" is not available in this Frankfurter v1 currency set. Accepted: EUR, GBP, JPY, USD.',
       data: {
         accepted_codes: ACCEPTED,
         field: 'base_currency',
@@ -180,7 +181,9 @@ describe('fx_get_rates', () => {
       fxGetRates.handler({ base_currency: 'USD', symbols: ['XYZ'] }, ctx),
     ).rejects.toMatchObject({
       data: { field: 'symbols', reason: 'unsupported_currency', rejected_codes: ['XYZ'] },
-      message: expect.stringMatching(/^symbols "XYZ" is not supported by the ECB\. Accepted: /),
+      message: expect.stringMatching(
+        /^symbols "XYZ" is not available in this Frankfurter v1 currency set\. Accepted: /,
+      ),
     });
   });
 
@@ -194,7 +197,9 @@ describe('fx_get_rates', () => {
       (e: unknown) => e as Error & { data: Record<string, unknown> },
     );
 
-    expect(error.message).toMatch(/^symbols contains codes not supported by the ECB: XYZ, ABC\. /);
+    expect(error.message).toMatch(
+      /^symbols contains codes outside this Frankfurter v1 currency set: XYZ, ABC\. /,
+    );
     expect(error.message.split('Accepted:')).toHaveLength(2);
     expect(error.data).toMatchObject({
       accepted_codes: ACCEPTED,
@@ -230,8 +235,8 @@ describe('fx_get_rates', () => {
       rate_date: '2024-06-04',
       rates: { EUR: 0.92, JPY: 157.2 },
       date_snapped: false,
-      rate_type: 'ECB reference (mid-market)',
-      source: 'ECB via Frankfurter',
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
     };
 
     it('renders all rate fields', () => {
@@ -240,8 +245,8 @@ describe('fx_get_rates', () => {
       expect(text).toContain('**EUR**: 0.92');
       expect(text).toContain('**JPY**: 157.2');
       expect(text).toContain('2024-06-04');
-      expect(text).toContain('ECB reference');
-      expect(text).toContain('ECB via Frankfurter');
+      expect(text).toContain('Daily rate (Frankfurter v1)');
+      expect(text).toContain('Frankfurter v1');
     });
 
     it('omits the snap notice when the date was not snapped', () => {
@@ -252,7 +257,7 @@ describe('fx_get_rates', () => {
       const text = formatText({ ...output, rate_date: '2024-05-31', date_snapped: true });
 
       expect(text).toContain(
-        '⚠️ *Requested date snapped to 2024-05-31 (weekend/holiday — ECB publishes business days only)*',
+        '⚠️ *Requested date snapped to 2024-05-31 (weekend/holiday — daily observations may skip non-publication days)*',
       );
     });
   });

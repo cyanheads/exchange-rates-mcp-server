@@ -109,6 +109,35 @@ const pointInTimeCases = (
 ];
 
 const cases: HintCase[] = [
+  {
+    name: 'explicit staging with DataCanvas disabled',
+    tool: fxGetTimeseries,
+    reason: 'canvas_unavailable',
+    input: { base_currency: 'USD', quote_currency: 'EUR', ...rateWindow, canvas_id: 'abc1234567' },
+    setup: () => {
+      mockGetTimeSeries.mockResolvedValue({
+        rows: [],
+        startDate: rateWindow.start_date,
+        endDate: rateWindow.end_date,
+      });
+      mockGetCanvas.mockReturnValue(undefined);
+    },
+  },
+  {
+    name: 'explicit staging with an expired canvas',
+    tool: fxGetTimeseries,
+    reason: 'canvas_not_found',
+    input: { base_currency: 'USD', quote_currency: 'EUR', ...rateWindow, canvas_id: 'abc1234567' },
+    setup: () => {
+      mockGetTimeSeries.mockResolvedValue({
+        rows: [],
+        startDate: rateWindow.start_date,
+        endDate: rateWindow.end_date,
+      });
+      withCanvas();
+      mockAcquire.mockRejectedValue(expiredCanvas());
+    },
+  },
   ...pointInTimeCases(fxGetRate, { base_currency: 'XYZ', quote_currency: 'EUR' }, mockGetRate),
   ...pointInTimeCases(fxGetRates, { base_currency: 'XYZ' }, mockGetRates),
   ...pointInTimeCases(

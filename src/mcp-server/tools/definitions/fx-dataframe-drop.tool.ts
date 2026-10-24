@@ -12,7 +12,7 @@ import { getCanvas } from '@/services/canvas/canvas-accessor.js';
 const fxDataframeDropDefinition = tool('fx_dataframe_drop', {
   description:
     'Permanently remove one table or view staged on a DataCanvas by fx_get_timeseries. ' +
-    'This deletes staged analytical data only; ECB rate data is never affected and the same ' +
+    'This deletes staged analytical data only; Frankfurter v1 rate data is never affected and the same ' +
     'series can be re-staged by re-running fx_get_timeseries. ' +
     'Call fx_dataframe_describe first to get the exact table name. ' +
     'Disabled unless the deployment sets FX_ENABLE_CANVAS_DROP=true.',
