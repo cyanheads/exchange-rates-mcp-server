@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-10-24
+
+Precise FX rates and complete historical time-series results.
+
 ## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-20 · ⚠️ Breaking
 
 Cancellable FX requests, currency aliases, and canvas lifecycle fixes.
