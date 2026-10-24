@@ -263,6 +263,28 @@ describe('fx_dataframe_query row_limit', () => {
     vi.clearAllMocks();
   });
 
+  it('clamps an over-cap positive integer and composes both notices', async () => {
+    stageQueryResult({ rows: [{ rate: 1 }], rowCount: 1, truncated: true });
+    const result = await runToolContract(fxDataframeQuery, {
+      canvas_id: 'abc1234567',
+      query: 'SELECT 1',
+      row_limit: 10001,
+    });
+    expect(result.isError).toBeFalsy();
+    expect(mockQuery).toHaveBeenCalledWith(
+      'SELECT 1',
+      expect.objectContaining({ rowLimit: 10000 }),
+    );
+    for (const surface of [
+      JSON.stringify(result.structuredContent),
+      JSON.stringify(result.content),
+    ]) {
+      expect(surface).toContain('10001');
+      expect(surface).toContain('10000');
+      expect(surface).toContain('OFFSET 10000');
+    }
+  });
+
   it('defaults row_limit to a bound below 200 and passes it to the canvas query', async () => {
     stageQueryResult({ rows: seriesRows(2), rowCount: 2 });
     const input = queryInput('SELECT 1');
@@ -293,7 +315,7 @@ describe('fx_dataframe_query row_limit', () => {
     ['zero', 0],
     ['a negative number', -1],
     ['a fraction', 2.5],
-    ['a value above the 10,000 canvas ceiling', 10_001],
+    ['a nonnumeric value', '10001'],
   ])('rejects row_limit of %s at the schema', (_label, row_limit) => {
     const parsed = fxDataframeQuery.input.safeParse({
       canvas_id: 'abc1234567',

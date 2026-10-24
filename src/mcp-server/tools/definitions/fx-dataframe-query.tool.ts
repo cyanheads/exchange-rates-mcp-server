@@ -44,16 +44,15 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       .describe(
         'Read-only SQL SELECT statement. Reference tables by the names returned by fx_dataframe_describe ' +
           'or the table_name field from fx_get_timeseries. ' +
-          "Example: SELECT date, rate FROM fx_usd_eur WHERE date > '2024-01-01' ORDER BY date",
+          "Example: SELECT date, rate FROM <table_name> WHERE date > '2024-01-01' ORDER BY date; replace <table_name> with the returned name, including its unique suffix.",
       ),
     row_limit: z
       .number()
       .int()
       .min(1)
-      .max(MAX_ROW_LIMIT)
       .default(DEFAULT_ROW_LIMIT)
       .describe(
-        `Most rows to return (1–${MAX_ROW_LIMIT}, default ${DEFAULT_ROW_LIMIT}). When the query ` +
+        `Most rows to return (positive integer, default ${DEFAULT_ROW_LIMIT}; values above ${MAX_ROW_LIMIT} clamp to ${MAX_ROW_LIMIT} with a notice). When the query ` +
           'produces more, truncated is true — page with ORDER BY <column> LIMIT <n> OFFSET <m> in the ' +
           'SQL, or aggregate, rather than raising this toward the maximum.',
       ),
@@ -93,8 +92,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       .string()
       .optional()
       .describe(
-        'Present when truncated is true: how many rows came back and the ORDER BY … LIMIT … OFFSET ' +
-          'query shape that fetches the next page.',
+        'Reports requested and effective row limits when clamped, and the ORDER BY … LIMIT … OFFSET query shape when the result is truncated.',
       ),
   },
 
@@ -121,6 +119,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
   ],
 
   async handler(input, ctx) {
+    const rowLimit = Math.min(input.row_limit, MAX_ROW_LIMIT);
     const canvas = getCanvas();
     if (!canvas) {
       throw serviceUnavailable('DataCanvas is not enabled. Set CANVAS_PROVIDER_TYPE=duckdb.');
@@ -143,7 +142,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     let result: QueryResult;
     try {
       result = await instance.query(input.query, {
-        rowLimit: input.row_limit,
+        rowLimit,
         signal: ctx.signal,
       });
     } catch (err) {
@@ -177,13 +176,19 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       truncated,
     });
 
+    const clampNotice =
+      input.row_limit > MAX_ROW_LIMIT
+        ? `Requested row_limit ${input.row_limit} was clamped to ${rowLimit}. `
+        : '';
     if (truncated) {
       ctx.enrich.notice(
-        `The query produced more than ${input.row_limit} rows; rows holds the first ${input.row_limit}. ` +
-          `For the next page re-run it with ORDER BY <column> LIMIT ${input.row_limit} OFFSET ${input.row_limit} ` +
+        `${clampNotice}The query produced more than ${rowLimit} rows; rows holds the first ${rowLimit}. ` +
+          `For the next page re-run it with ORDER BY <column> LIMIT ${rowLimit} OFFSET ${rowLimit} ` +
           '(raise OFFSET by the limit each page). ORDER BY is required: without it DuckDB does not ' +
           'guarantee the same row order across pages. Aggregating or filtering shrinks the result instead.',
       );
+    } else if (clampNotice) {
+      ctx.enrich.notice(clampNotice.trim());
     }
 
     return {
