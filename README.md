@@ -59,6 +59,10 @@ Currency values, including `symbols`, are trimmed and uppercased. Point dates ac
 
 All resource data is also reachable via tools — use `fx_list_currencies` or `fx_get_rates` for programmatic access.
 
+### Skill
+
+[`exchange-rates-guide`](skills/exchange-rates-guide/SKILL.md) covers historical currency coverage, observed-day summaries, paging and SQL comparisons. It ships with npm, Docker and MCPB installs and is available over MCP at `skill://exchange-rates-guide/SKILL.md`.
+
 Cancelling a tool call or resource read stops its upstream fetch, response-body read, and retry backoff. V1 requests retain two retries and a 10-second timeout per attempt within a 12-second total budget per read. Optional coverage metadata gets one 1-second request without retries.
 
 ## Capability reference
@@ -363,7 +367,7 @@ docker build -t exchange-rates-mcp-server .
 docker run --rm -p 3010:3010 exchange-rates-mcp-server
 ```
 
-The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/exchange-rates-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them. Production dependencies, DuckDB's native binding included, are cross-installed for the target platform in a separate `deps` stage, so multi-arch builds never run Bun under emulation and the runtime image carries only `node_modules` and `dist/`.
+The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/exchange-rates-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them. Production dependencies, DuckDB's native binding included, are cross-installed for the target platform in a separate `deps` stage, so multi-arch builds never run Bun under emulation and the runtime image carries `node_modules/`, `dist/` and the published `skills/` tree.
 
 ---
 
@@ -379,6 +383,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | `src/services/canvas/` | Module-level DataCanvas accessor for `fx_get_timeseries` spillover. |
 | `src/utils/` | Output helpers — Markdown table-cell escaping for `fx_dataframe_query`. |
 | `tests/` | Unit and integration tests mirroring `src/`. |
+| `skills/` | Published agent guidance for historical FX analysis. |
 | `docs/` | Design document and idea notes. |
 
 ---
