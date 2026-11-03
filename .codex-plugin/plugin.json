@@ -1,6 +1,6 @@
 {
   "name": "exchange-rates-mcp-server",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Convert currencies, get FX rates, and query historical Frankfurter v1 exchange rate data via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",

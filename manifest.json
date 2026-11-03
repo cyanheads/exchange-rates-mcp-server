@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "exchange-rates-mcp-server",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Convert currencies, get FX rates, and query historical Frankfurter v1 exchange rate data.",
   "author": { "name": "cyanheads" },
   "homepage": "https://github.com/cyanheads/exchange-rates-mcp-server#readme",
