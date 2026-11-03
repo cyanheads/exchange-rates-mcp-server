@@ -11,7 +11,10 @@ export interface CurrencyMap {
 /** A single currency with code and name. */
 export interface Currency {
   code: string;
+  end_date?: string;
   name: string;
+  /** Official ECB metadata outer bounds, not a guarantee against interior gaps. */
+  start_date?: string;
 }
 
 /** Raw API response from GET /latest or GET /{date}. */
@@ -66,6 +69,8 @@ export interface SeriesRow extends Record<string, unknown> {
 export interface TimeSeriesResult {
   /** Last publication date inside the requested window; the requested end when there is none. */
   endDate: string;
+  /** Clipped served dates missing either leg; not non-publication calendar dates. */
+  missingCoverage?: { count: number; firstDate: string; lastDate: string };
   /** Publication days inside the requested window, ascending by date. May be empty. */
   rows: SeriesRow[];
   /** First publication date inside the requested window; the requested start when there is none. */

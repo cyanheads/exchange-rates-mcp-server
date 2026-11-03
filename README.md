@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.5.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.5.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/exchange-rates-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/exchange-rates-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/exchange-rates-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -59,15 +59,16 @@ Currency values, including `symbols`, are trimmed and uppercased. Point dates ac
 
 All resource data is also reachable via tools — use `fx_list_currencies` or `fx_get_rates` for programmatic access.
 
-Cancelling a tool call or resource read stops its upstream fetch, response-body read, and retry backoff. Uncancelled requests retain two retries and a 10-second timeout per attempt.
+Cancelling a tool call or resource read stops its upstream fetch, response-body read, and retry backoff. V1 requests retain two retries and a 10-second timeout per attempt within a 12-second total budget per read. Optional coverage metadata gets one 1-second request without retries.
 
 ## Capability reference
 
 ### `fx_list_currencies` <sub>tool</sub>
 
-- No input parameters
-- Returns `currencies: [{ code, name }]`, `count`, `source` and `as_of` (the latest served daily rate date), sorted alphabetically by code
-- This is current discovery. Historical requests validate against their unfiltered EUR snapshot or raw served range, so retired codes remain usable on dates where they have observations. Unknown codes fail `unsupported_currency` with sorted accepted/rejected codes and the input field; current currencies without historical observations fail `upstream_no_data`.
+- Optional `include_retired` (default `false`) adds historical codes absent from current v1 discovery
+- Returns `currencies: [{ code, name, start_date?, end_date? }]`, `count`, `source` and `as_of` (the latest served daily rate date), sorted alphabetically by code. Coverage dates come from optional official ECB metadata and describe outer bounds, not uninterrupted availability. A dated `end_date` does not itself imply retirement.
+- Metadata is cached for a day and queried only for the default official v1 base. Unavailable metadata leaves current discovery intact with a notice; valid v1 rate requests never depend on metadata.
+- Default discovery lists current currencies; `include_retired: true` adds historical codes when metadata is available. Historical requests validate against their unfiltered EUR snapshot or raw served range, so retired codes remain usable on dates where they have observations. Unknown codes fail `unsupported_currency` with sorted accepted/rejected codes and the input field; current currencies without historical observations fail `upstream_no_data`.
 
 ---
 
@@ -76,6 +77,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 - `base_currency` required; `date` optional (default latest, history from 1999-01-04, no future dates); optional `symbols` array narrows the response and must name at least one code
 - Returns a `rates` map (quote code → rate), the actual `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
 - Naming the base currency in `symbols` is valid — answered locally with a rate of 1 rather than sent upstream
+- Missing observations from a served snapshot identify the offending `field` and sorted, deduplicated `missing_codes`; unknown currencies retain `unsupported_currency` precedence. A response without any snapshot remains an unattributed `upstream_no_data` failure.
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
@@ -93,7 +95,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 - `base_currency`, `quote_currency`, `amount` (must be > 0) required; `date` optional (default latest, history from 1999-01-04, no future dates)
 - Handles EUR↔any, any↔EUR, and cross-rate pairs (e.g. USD→JPY) in a single upstream call
-- Returns `quote_amount` (rounded to 6 decimal places), `rate`, `rate_date`, `date_snapped`, plus `rate_type` and `source` provenance
+- Returns `quote_amount` as the unrounded JavaScript-number `amount * rate` product, `rate`, `rate_date`, `date_snapped`, plus `rate_type` and `source` provenance. No currency minor-unit rounding policy is applied; formatted rates use quote currency per base currency.
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
@@ -101,9 +103,11 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 ### `fx_get_timeseries` <sub>tool</sub>
 
 - `base_currency`, `quote_currency`, `start_date`, `end_date` required (history from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
-- Inline results page at 500 publication days — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
+- Optional integer `limit` (default 500, minimum 0) bounds returned observations, clamping values above 500 with a notice. `limit: 0` returns summary and metadata with empty `rates`; a nonempty inline result then points `next_start_date` at the first observation. Repeat with a positive limit to advance. Counts, summary, bounds, staging eligibility and complete staged tables are independent of the limit.
+- Inline results page at up to 500 observed publication days — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
 - Ranges over `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` (default 90 days) are considered for DataCanvas staging. Series over the 40,000-character preview budget return `spilled: true`, `canvas_id`, and `table_name`; smaller series and deployments with `CANVAS_PROVIDER_TYPE=none` page inline
 - A same-currency pair returns 1 on actual observation dates. Every non-identity row requires both EUR legs on that same date; missing legs never fabricate observations. Membership uses all raw served dates before inclusive clipping, preserving weekend-only empty windows.
+- Missing either leg on a served in-window day produces a notice with the affected day count and first/last dates. Each day counts once, even if both legs are absent; weekends, holidays and clipped prior dates do not count. Statistics cover observed days only. Coverage and delivery notices coexist; `truncated` describes omitted observations in delivery, not missing upstream coverage.
 - An empty range (only weekends/holidays) returns `rate_count: 0` with an explanatory `notice`, distinguishable from an error
 - Long ranges that fit the inline preview release their newly acquired canvas; failed or cancelled staging does too. A supplied canvas remains available.
 - An explicit `canvas_id` always stages the complete result, including short and empty ranges, using `rate DOUBLE`. Each table name has a fresh identifier suffix; repeated and concurrent calls preserve all earlier tables. Unknown IDs fail `canvas_not_found`; disabled DataCanvas fails `canvas_unavailable`. `truncated` is false when the preview includes every observation.
@@ -141,7 +145,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx://currencies` <sub>resource</sub>
 
-- No parameters; returns current discovery with `currencies`, `count`, `source`, `as_of` as `application/json` — the same payload as `fx_list_currencies`
+- No parameters; returns current discovery with optional coverage dates, `count`, `source`, `as_of` and any metadata-unavailability notice as `application/json`. Use `fx_list_currencies` with `include_retired: true` for historical discovery.
 - Listed as a single static resource
 
 ---

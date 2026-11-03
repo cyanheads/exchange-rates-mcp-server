@@ -7,6 +7,7 @@ import { config } from '@cyanheads/mcp-ts-core/config';
 import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { fetchCurrencyMetadata } from './currency-metadata.js';
 import { invalidDateFormat, unsupportedCurrency, upstreamNoData } from './errors.js';
 import type {
   Currency,
@@ -64,6 +65,7 @@ class FrankfurterService {
    */
   private readonly userAgent: string;
   private currencyCache?: { codes: Set<string>; fetchedAt: number; list: Currency[] };
+  private metadataCache?: { fetchedAt: number; currencies: Currency[] | undefined };
 
   constructor() {
     this.baseUrl = getServerConfig().frankfurterBaseUrl;
@@ -80,17 +82,68 @@ class FrankfurterService {
   /** Current discovery with the latest served rate date, cached independently of historical data. */
   async currencyDiscovery(
     signal?: AbortSignal,
-  ): Promise<{ currencies: Currency[]; as_of: string }> {
-    const currencies = await this.listCurrencies(signal);
+    includeRetired = false,
+  ): Promise<{ currencies: Currency[]; as_of: string; notice?: string }> {
+    const current = await this.listCurrencies(signal);
     signal?.throwIfAborted();
     const cached = this.discoveryDateCache;
+    let as_of: string;
     if (cached && Date.now() - cached.fetchedAt <= CURRENCY_CACHE_TTL_MS) {
-      return { currencies, as_of: cached.date };
+      as_of = cached.date;
+    } else {
+      const raw = await this.fetchJson<FrankfurterRateResponse>('/latest?base=EUR', signal);
+      signal?.throwIfAborted();
+      this.discoveryDateCache = { date: raw.date, fetchedAt: Date.now() };
+      as_of = raw.date;
     }
-    const raw = await this.fetchJson<FrankfurterRateResponse>('/latest?base=EUR', signal);
+    const metadata = await this.currencyMetadata(signal);
+    const bounds = new Map(metadata?.map((currency) => [currency.code, currency]));
+    const currencies = current.map((currency) => {
+      const coverage = bounds.get(currency.code);
+      return {
+        ...currency,
+        ...(coverage && { start_date: coverage.start_date, end_date: coverage.end_date }),
+      };
+    });
+    if (includeRetired && metadata) {
+      const currentCodes = new Set(current.map((currency) => currency.code));
+      currencies.push(...metadata.filter((currency) => !currentCodes.has(currency.code)));
+      currencies.sort((a, b) => a.code.localeCompare(b.code));
+    }
+    const unavailable = metadata === undefined;
+    return {
+      currencies,
+      as_of,
+      ...(unavailable && {
+        notice:
+          'Optional official ECB coverage metadata is unavailable; current v1 discovery is preserved, but coverage dates and additional retired currencies cannot be supplied.',
+      }),
+    };
+  }
+
+  /** Never query official metadata for a custom v1 source, nor share a caller's cancellation. */
+  private async currencyMetadata(signal?: AbortSignal): Promise<Currency[] | undefined> {
     signal?.throwIfAborted();
-    this.discoveryDateCache = { date: raw.date, fetchedAt: Date.now() };
-    return { currencies, as_of: raw.date };
+    if (this.baseUrl !== 'https://api.frankfurter.dev/v1') return;
+    const cached = this.metadataCache;
+    if (cached && Date.now() - cached.fetchedAt <= CURRENCY_CACHE_TTL_MS)
+      return cached.currencies?.map((currency) => ({ ...currency }));
+    const currencies = await fetchCurrencyMetadata(this.userAgent, signal);
+    signal?.throwIfAborted();
+    this.metadataCache = { currencies, fetchedAt: Date.now() };
+    return currencies?.map((currency) => ({ ...currency }));
+  }
+
+  /** Coverage adds recovery context only; it never changes membership or the original diagnosis. */
+  private async currencyRejection(
+    field: string,
+    rejected: string[],
+    accepted: string[],
+    signal?: AbortSignal,
+  ) {
+    const metadata = await this.currencyMetadata(signal);
+    const windows = metadata?.filter((currency) => rejected.includes(currency.code));
+    return unsupportedCurrency(field, rejected, accepted, windows);
   }
 
   private discoveryDateCache?: { date: string; fetchedAt: number };
@@ -127,10 +180,11 @@ class FrankfurterService {
     const { codes: supported, list } = await this.currencies(signal);
     const unsupported = [...new Set(codes.filter((code) => !supported.has(code)))].sort();
     if (unsupported.length > 0) {
-      throw unsupportedCurrency(
+      throw await this.currencyRejection(
         field,
         unsupported,
         list.map((currency) => currency.code),
+        signal,
       );
     }
   }
@@ -149,9 +203,11 @@ class FrankfurterService {
     const current = await this.currencies(signal);
     for (const [field, missing] of absent) {
       const unknown = [...new Set(missing.filter((code) => !current.codes.has(code)))].sort();
-      if (unknown.length > 0) throw unsupportedCurrency(field, unknown, accepted);
+      if (unknown.length > 0) throw await this.currencyRejection(field, unknown, accepted, signal);
     }
-    throw upstreamNoData();
+    for (const [field, missing] of absent) {
+      if (missing.length > 0) throw upstreamNoData(field, missing);
+    }
   }
 
   // ── Rate (point-in-time) ────────────────────────────────────────────────────
@@ -188,7 +244,8 @@ class FrankfurterService {
     }
     const baseLeg = upper_base === 'EUR' ? 1 : raw.rates[upper_base];
     const quoteLeg = upper_quote === 'EUR' ? 1 : raw.rates[upper_quote];
-    if (baseLeg === undefined || quoteLeg === undefined) throw upstreamNoData();
+    if (baseLeg === undefined) throw upstreamNoData('base_currency', [upper_base]);
+    if (quoteLeg === undefined) throw upstreamNoData('quote_currency', [upper_quote]);
     const rate = quoteLeg / baseLeg;
 
     const dateSnapped = date !== 'latest' && raw.date !== date;
@@ -240,15 +297,17 @@ class FrankfurterService {
       );
     }
     const baseLeg = upper_base === 'EUR' ? 1 : raw.rates[upper_base];
-    if (baseLeg === undefined) throw upstreamNoData();
+    if (baseLeg === undefined) throw upstreamNoData('base_currency', [upper_base]);
     const requested =
       upper_symbols.length > 0
         ? upper_symbols
         : ['EUR', ...Object.keys(raw.rates)].filter((code) => code !== upper_base);
     const rates = Object.create(null) as Record<string, number>;
+    const missing = requested.filter((code) => code !== 'EUR' && raw.rates[code] === undefined);
+    if (missing.length > 0) throw upstreamNoData('symbols', missing);
     for (const code of requested) {
       const leg = code === 'EUR' ? 1 : raw.rates[code];
-      if (leg === undefined) throw upstreamNoData();
+      if (leg === undefined) throw upstreamNoData('symbols', [code]);
       rates[code] = leg / baseLeg;
     }
     return {
@@ -300,6 +359,7 @@ class FrankfurterService {
       signal,
     );
 
+    let missingCoverage: TimeSeriesResult['missingCoverage'];
     const rows: SeriesRow[] = Object.entries(raw.rates)
       .filter(([date]) => date >= startDate && date <= endDate)
       .sort(([a], [b]) => a.localeCompare(b))
@@ -311,7 +371,14 @@ class FrankfurterService {
          */
         const baseLeg = upper_base === 'EUR' ? 1 : rateMap[upper_base];
         const quoteLeg = upper_quote === 'EUR' ? 1 : rateMap[upper_quote];
-        if (baseLeg === undefined || quoteLeg === undefined) return [];
+        if (baseLeg === undefined || quoteLeg === undefined) {
+          missingCoverage = {
+            count: (missingCoverage?.count ?? 0) + 1,
+            firstDate: missingCoverage?.firstDate ?? date,
+            lastDate: date,
+          };
+          return [];
+        }
         return [
           {
             date,
@@ -324,6 +391,7 @@ class FrankfurterService {
 
     return {
       rows,
+      ...(missingCoverage && { missingCoverage }),
       startDate: rows[0]?.date ?? startDate,
       endDate: rows.at(-1)?.date ?? endDate,
     };
@@ -333,6 +401,10 @@ class FrankfurterService {
 
   private fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const deadlineSignal = AbortSignal.any([
+      ...(signal ? [signal] : []),
+      AbortSignal.timeout(12_000),
+    ]);
     return withRetry(
       async ({ signal: attemptSignal }) => {
         attemptSignal.throwIfAborted();
@@ -378,7 +450,7 @@ class FrankfurterService {
         signal?.throwIfAborted();
         return body;
       },
-      { maxRetries: 2, baseDelayMs: 500, ...(signal && { signal }) },
+      { maxRetries: 2, baseDelayMs: 500, signal: deadlineSignal },
     );
   }
 }

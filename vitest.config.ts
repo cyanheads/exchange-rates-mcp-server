@@ -17,6 +17,8 @@ export default mergeConfig(
   defineConfig({
     resolve: { alias },
     test: {
+      // Native canvas suites and startup subprocesses share the runner's CPU budget.
+      maxWorkers: 2,
       projects: [
         {
           extends: true,

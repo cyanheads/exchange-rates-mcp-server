@@ -2,9 +2,9 @@
 
 **Server:** exchange-rates-mcp-server
 **Version:** 0.5.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
+**MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -44,9 +44,9 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ## Patterns
 
-Rates use one unfiltered EUR snapshot/range per request: divide quote leg by base leg locally without intermediate rounding (EUR = 1). Historical membership uses raw served data before inclusive clipping, including retired currencies; latest membership uses current discovery. `fx_list_currencies` and `fx://currencies` expose current discovery with `as_of` from the latest served rate date. Provenance is literally `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; never infer individual providers from v1 payloads. Currency values are trimmed and uppercased; advertised date patterns are metadata so handler-level typed date errors remain reachable.
+Rates use one unfiltered EUR snapshot/range per request: divide quote leg by base leg locally without intermediate rounding (EUR = 1); conversion amounts retain the unrounded JavaScript-number product. Historical membership uses raw served data before inclusive clipping, including retired currencies; latest membership uses current discovery. `fx_list_currencies` adds retired discovery with `include_retired`; `fx://currencies` stays current-only. Both expose `as_of` from the latest served rate date and optional official ECB coverage outer bounds, never proof against interior gaps. V1 membership determines retirement, not metadata end_date. Metadata is optional, official-base-only, cached daily, bounded to one second with no retries, and never required for a successful rate call. Discovery discloses unavailable metadata. V1 reads share a 12-second deadline across retries. Provenance is literally `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; never infer individual providers from v1 payloads. Currency values are trimmed and uppercased; advertised date patterns are metadata so handler-level typed date errors remain reachable. Preserve field/missing_codes for absent observations through every upstream_no_data rethrow; generic 404 failures carry no invented attribution.
 
-`fx_get_timeseries` computes full-range summary before delivery. Empty ranges omit summary; extrema ties use the earliest date. The arithmetic daily mean is not an accounting-policy prescription. Explicit `canvas_id` always stages, including empty/short ranges, with `rate DOUBLE`; every registration gets a unique pair-name suffix and preserves prior tables. Unknown IDs fail `canvas_not_found`, disabled explicit staging fails `canvas_unavailable`. Implicit inline results release newly acquired unused canvases; supplied canvases remain caller-owned. `fx_dataframe_query` defaults to 150 rows and clamps over-cap positive integers to 10,000 with composed clamp/truncation notices.
+`fx_get_timeseries` computes full-range observed-day summary before delivery. Count each clipped served day missing either leg once, retaining count and first/last dates in composed coverage/delivery notices; weekends, holidays and prior snapped dates never count. `limit` defaults/clamps to 500, accepts 0 for summary only, and bounds delivery after spill eligibility without affecting summary/count/bounds or full staged tables. Inline zero-limit continuation points to the first observation and requires a positive limit to advance; staged continuation stays SQL-only. Empty ranges omit summary; extrema ties use the earliest date. The arithmetic daily mean is not an accounting-policy prescription. Explicit `canvas_id` always stages, including empty/short ranges, with `rate DOUBLE`; every registration gets a unique pair-name suffix and preserves prior tables. Unknown IDs fail `canvas_not_found`, disabled explicit staging fails `canvas_unavailable`. Implicit inline results release newly acquired unused canvases; supplied canvases remain caller-owned. `fx_dataframe_query` defaults to 150 rows and clamps over-cap positive integers to 10,000 with composed clamp/truncation notices.
 
 ### Tool
 
@@ -259,6 +259,7 @@ src/
     canvas/
       canvas-accessor.ts               # Module-level DataCanvas accessor (set via createApp setup())
     frankfurter/
+      currency-metadata.ts             # Optional validated official ECB coverage; one-second request without retries
       errors.ts                        # Structured service failures — reason/field on McpError.data, read via failureOf()
       frankfurter-service.ts           # Frankfurter HTTP client — getRate, getRates, getTimeSeries, listCurrencies
       types.ts                         # Domain types (ResolvedRate, SeriesRow, TimeSeriesResult, …)
@@ -294,6 +295,8 @@ src/
 
 ## Skills
 
+Root `skills/` holds published skills for agents calling this server; author those with `add-skill`. `framework-skills/` holds development guidance and stays out of installed plugins. Published skills ship in npm, Docker, and MCPB and are served with `createApp({ skills: 'skills' })`.
+
 Skills are modular instructions in `framework-skills/` at the project root. Read them directly when a task matches — e.g., `framework-skills/add-tool/SKILL.md` when adding a tool. `bun run list-skills` prints the full registry. The directory is deliberately not `skills/`: Claude Code and Codex auto-load a plugin's root `skills/`, so a server that ships `.claude-plugin/` or `.codex-plugin/` would hand these development skills to every agent that installs it. Keep `skills/` free for skills meant for those agents.
 
 **Agent skill directory:** Copy skills into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). Skills then load as context without referencing `framework-skills/` paths. After framework updates, run the `maintenance` skill — Phase B re-syncs the agent directory.
@@ -308,6 +311,7 @@ Available skills:
 | `add-app-tool` | Scaffold an MCP App tool + paired UI resource |
 | `add-resource` | Scaffold a new resource definition |
 | `add-prompt` | Scaffold a new prompt definition |
+| `add-skill` | Author a skill the server publishes in root `skills/` for the agents that use it — when one earns its place, structure, validation, delivery |
 | `add-service` | Scaffold a new service integration |
 | `add-test` | Scaffold test file for a tool, resource, or service |
 | `field-test` | Exercise tools/resources/prompts with real inputs, verify behavior, report issues |
@@ -344,6 +348,8 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Commands
 
+**Dependency hold:** `@duckdb/node-api` stays on `^1.5.6-r.2` until `cyanheads/mcp-ts-core#800` is fixed. DuckDB 2 emits `PRAGMA_SHOW` for `SHOW <table>`, which the framework SQL gate refuses; the same call works on 1.5.
+
 **Runtime:** Scripts use Bun's native TypeScript execution — `bun run <cmd>` is the standard invocation. `npm run <cmd>` also works (npm delegates to bun).
 
 | Command | Purpose |
@@ -355,7 +361,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run audit:fix` | `bun audit fix` — upgrade vulnerable packages to the lowest safe version within existing ranges (`--dry-run` previews, `--latest` rewrites ranges). First response when `devcheck` flags a transitive advisory; then `bun update <name>`, then `bun dedupe` |
 | `bun run audit:refresh` | Delete `bun.lock` and reinstall. Last resort after `audit:fix`, `bun update <name>`, and `bun dedupe` — re-resolves every ranged dep (the framework pin included) and rewrites the lockfile as `lockfileVersion: 2` |
 | `bun run lint:mcp` | Run the MCP definition linter standalone (rule catalog: `api-linter` skill) |
-| `bun run lint:packaging` | Packaging surface checks — `server.json`/`manifest.json` env-var parity (run by devcheck) |
+| `bun run lint:packaging` | Packaging surface checks — env-var parity, `.mcpbignore` coverage, plugin manifests, and the published `skills/` tree (run by devcheck) |
 | `bun run list-skills` | Print the skill registry |
 | `bun run tree` | Generate directory structure doc |
 | `bun run format` | Auto-fix formatting (safe fixes only) |
@@ -373,6 +379,8 @@ When you complete a skill's checklist, check the boxes and add a completion time
 ---
 
 ## Bundling
+
+`.mcpbignore` uses root-anchored lines for source, scripts, tests, docs, changelog sources, caches, agent docs, and plugin metadata. Root `skills/` remains included. The cleaner also removes node-gyp build intermediates and framework build-only files. Its agent-doc selector matches package-root trees only: runtime modules such as `@modelcontextprotocol/server/dist/ext/skills/` must remain in the archive.
 
 `bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. DataCanvas defaults to DuckDB here (`src/index.ts` sets `CANVAS_PROVIDER_TYPE` to `duckdb` when it is unset or empty), but the bundle ships without the DuckDB native, so `manifest.json` pins `CANVAS_PROVIDER_TYPE` to `none`: the bundle is inline-only — `fx_dataframe_*` stay out of `tools/list` and `fx_get_timeseries` pages every range inline. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
 

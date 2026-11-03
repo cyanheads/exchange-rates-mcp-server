@@ -7,6 +7,7 @@
  */
 
 import { McpError, notFound, validationError } from '@cyanheads/mcp-ts-core/errors';
+import type { Currency } from './types.js';
 
 /**
  * Contract reasons the Frankfurter service attaches to the errors it throws.
@@ -24,6 +25,8 @@ export type FrankfurterFailureReason = (typeof FAILURE_REASONS)[number];
 export interface FrankfurterFailure {
   /** The input at fault, named as the calling tool exposes it (e.g. `start_date`, `symbols`). */
   field?: string;
+  /** Known requested codes without an observation in the served data. */
+  missing_codes?: string[];
   /** Contract reason — mirrors the `errors[]` entry the calling tool declares. */
   reason: FrankfurterFailureReason;
 }
@@ -41,6 +44,8 @@ export function invalidDateFormat(field: string, value: string): McpError {
 export interface UnsupportedCurrencyCodes {
   /** The current or historical served currency set the request was checked against, sorted. */
   accepted_codes: string[];
+  /** Official outer coverage bounds for rejected historical codes, when available. */
+  currency_windows?: Currency[];
   /** The requested codes outside that set. */
   rejected_codes: string[];
 }
@@ -53,16 +58,21 @@ export function unsupportedCurrency(
   field: string,
   rejected: string[],
   accepted: string[],
+  windows?: Currency[],
 ): McpError {
   const rejection =
     rejected.length === 1
       ? `${field} "${rejected[0]}" is not available in this Frankfurter v1 currency set.`
       : `${field} contains codes outside this Frankfurter v1 currency set: ${rejected.join(', ')}.`;
-  return validationError(`${rejection} Accepted: ${accepted.join(', ')}.`, {
+  const guidance = windows?.length
+    ? ` Historical coverage (outer bounds, gaps may occur): ${windows.map((currency) => `${currency.code} (${currency.name}): ${currency.start_date} through ${currency.end_date}`).join('; ')}. Request a historical date within these bounds; use fx_list_currencies with include_retired=true for discovery.`
+    : '';
+  return validationError(`${rejection} Accepted: ${accepted.join(', ')}.${guidance}`, {
     accepted_codes: accepted,
     field,
     reason: 'unsupported_currency',
     rejected_codes: rejected,
+    ...(windows?.length && { currency_windows: windows }),
   });
 }
 
@@ -76,10 +86,18 @@ export function unsupportedCurrency(
  * inputs and the configured Frankfurter host. The calling tool re-raises with a
  * message naming the pair and dates it asked for, which is the part a caller can act on.
  */
-export function upstreamNoData(): McpError {
-  return notFound('Frankfurter v1 returned no rates for this request.', {
-    reason: 'upstream_no_data',
-  });
+export function upstreamNoData(field?: string, missing?: string[]): McpError {
+  const missing_codes = missing && [...new Set(missing)].sort();
+  return notFound(
+    missing_codes
+      ? `Frankfurter v1 returned no observation for ${field}: ${missing_codes.join(', ')}.`
+      : 'Frankfurter v1 returned no rates for this request.',
+    {
+      ...(field && { field }),
+      ...(missing_codes && { missing_codes }),
+      reason: 'upstream_no_data',
+    },
+  );
 }
 
 /**
@@ -88,11 +106,17 @@ export function upstreamNoData(): McpError {
  */
 export function failureOf(error: unknown): FrankfurterFailure | undefined {
   if (!(error instanceof McpError)) return;
-  const data = error.data as { field?: unknown; reason?: unknown } | undefined;
+  const data = error.data as
+    | { field?: unknown; reason?: unknown; missing_codes?: unknown }
+    | undefined;
   const reason = FAILURE_REASONS.find((known) => known === data?.reason);
   if (reason === undefined) return;
   return {
     ...(typeof data?.field === 'string' ? { field: data.field } : {}),
+    ...(Array.isArray(data?.missing_codes) &&
+    data.missing_codes.every((code) => typeof code === 'string')
+      ? { missing_codes: data.missing_codes as string[] }
+      : {}),
     reason,
   };
 }
@@ -106,5 +130,9 @@ export function unsupportedCurrencyCodesOf(error: unknown): UnsupportedCurrencyC
   if (!(error instanceof McpError)) return;
   const data = error.data as Partial<UnsupportedCurrencyCodes> | undefined;
   if (!Array.isArray(data?.accepted_codes) || !Array.isArray(data?.rejected_codes)) return;
-  return { accepted_codes: data.accepted_codes, rejected_codes: data.rejected_codes };
+  return {
+    accepted_codes: data.accepted_codes,
+    rejected_codes: data.rejected_codes,
+    ...(data.currency_windows && { currency_windows: data.currency_windows }),
+  };
 }

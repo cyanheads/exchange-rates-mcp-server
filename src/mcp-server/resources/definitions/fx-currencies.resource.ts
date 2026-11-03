@@ -19,6 +19,18 @@ export const fxCurrenciesResource = resource('fx://currencies', {
           .object({
             code: z.string().describe('ISO 4217 currency code.'),
             name: z.string().describe('Full currency name.'),
+            start_date: z
+              .string()
+              .optional()
+              .describe(
+                'First covered date in optional official ECB metadata; outer bound, not uninterrupted availability.',
+              ),
+            end_date: z
+              .string()
+              .optional()
+              .describe(
+                'Last covered date in optional official ECB metadata; does not imply retirement.',
+              ),
           })
           .describe('A single supported currency.'),
       )
@@ -30,13 +42,20 @@ export const fxCurrenciesResource = resource('fx://currencies', {
         'Latest served rate date for current discovery; historical availability is checked against historical data.',
       ),
     source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
+    notice: z.string().optional().describe('Explains unavailable optional coverage metadata.'),
   }),
 
   async handler(_params, ctx) {
     const service = getFrankfurterService();
-    const { currencies, as_of } = await service.currencyDiscovery(ctx.signal);
+    const { currencies, as_of, notice } = await service.currencyDiscovery(ctx.signal);
     ctx.log.info('Fetched currencies resource', { count: currencies.length });
-    return { currencies, count: currencies.length, as_of, source: 'Frankfurter v1' };
+    return {
+      currencies,
+      count: currencies.length,
+      as_of,
+      source: 'Frankfurter v1',
+      ...(notice && { notice }),
+    };
   },
 
   list: () => ({

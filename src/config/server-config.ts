@@ -28,6 +28,11 @@ let _config: z.infer<typeof ServerConfigSchema> | undefined;
 
 /** Read only the registration flag; setup validates invalid values through the startup boundary. */
 export function isCanvasDropEnabled(): boolean {
+  try {
+    process.loadEnvFile();
+  } catch {
+    // createApp's config loader reports missing permissions or malformed files at startup.
+  }
   const flag = ServerConfigSchema.shape.enableCanvasDrop.safeParse(
     normalizeEnv({ FX_ENABLE_CANVAS_DROP: process.env.FX_ENABLE_CANVAS_DROP })
       .FX_ENABLE_CANVAS_DROP,

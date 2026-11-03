@@ -48,15 +48,14 @@ describe('fx_convert_currency', () => {
     expect(result.quote_currency).toBe('EUR');
   });
 
-  it('rounds to 6 decimal places', async () => {
+  it('retains JavaScript-number precision without deliberate amount rounding', async () => {
     mockGetRate.mockResolvedValue({ ...baseRate, rate: 1.0 / 3.0 });
     const ctx = createMockContext({ errors: fxConvertCurrency.errors });
     const result = await fxConvertCurrency.handler(
       { base_currency: 'USD', quote_currency: 'EUR', amount: 1 },
       ctx,
     );
-    // 1 * (1/3) = 0.333333 rounded to 6 places
-    expect(result.quote_amount.toString()).toMatch(/^0\.333333/);
+    expect(result.quote_amount).toBe(0.3333333333333333);
   });
 
   it('surfaces date_snapped flag', async () => {

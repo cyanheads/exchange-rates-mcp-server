@@ -56,7 +56,9 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
     base_amount: z.number().describe('The input amount in the base currency.'),
     quote_amount: z
       .number()
-      .describe('The converted amount in the quote currency, rounded to 6 decimal places.'),
+      .describe(
+        'The unrounded amount × rate product in the quote currency, using JavaScript floating-point precision; no currency minor-unit rounding policy is applied.',
+      ),
     rate: z
       .number()
       .describe('Exchange rate used: units of quote currency per 1 unit of base currency.'),
@@ -142,15 +144,18 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
       if (failure?.reason === 'upstream_no_data') {
         throw ctx.fail(
           'upstream_no_data',
-          `Frankfurter v1 returned no ${input.base_currency}/${input.quote_currency} rate for ${
-            date === 'latest' ? 'the latest business day' : date
-          }.`,
+          failure.missing_codes
+            ? (err as Error).message
+            : `Frankfurter v1 returned no ${input.base_currency}/${input.quote_currency} rate for ${
+                date === 'latest' ? 'the latest business day' : date
+              }.`,
+          { ...failure },
         );
       }
       throw err;
     }
 
-    const quoteAmount = Math.round(input.amount * resolved.rate * 1_000_000) / 1_000_000;
+    const quoteAmount = input.amount * resolved.rate;
 
     ctx.log.info('Converted currency', {
       base: resolved.baseCurrency,
@@ -184,7 +189,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
         type: 'text',
         text:
           `**${result.base_amount} ${result.base_currency}** = **${result.quote_amount} ${result.quote_currency}**\n` +
-          `Rate: ${result.rate} (${result.quote_currency}/${result.base_currency}) · ${result.rate_date}` +
+          `Rate: ${result.rate} (${result.quote_currency} per ${result.base_currency}) · ${result.rate_date}` +
           snapNote +
           `\n*${result.rate_type} · ${result.source}*`,
       },

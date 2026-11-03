@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-10-20 07:21:50
+Generated on: 2026-11-03 07:31:25
 
 ```text
 exchange-rates-mcp-server/
@@ -41,6 +41,8 @@ exchange-rates-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -138,6 +140,9 @@ exchange-rates-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── exchange-rates-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -165,6 +170,7 @@ exchange-rates-mcp-server/
 │   │   ├── canvas/
 │   │   │   └── canvas-accessor.ts
 │   │   └── frankfurter/
+│   │       ├── currency-metadata.ts
 │   │       ├── errors.ts
 │   │       ├── frankfurter-service.ts
 │   │       └── types.ts
@@ -176,13 +182,17 @@ exchange-rates-mcp-server/
 │   ├── resources/
 │   │   ├── fx-currencies.resource.test.ts
 │   │   └── fx-rates-latest.resource.test.ts
+│   ├── scripts/
+│   │   └── clean-mcpb.test.ts
 │   ├── services/
 │   │   ├── frankfurter-cancellation.test.ts
 │   │   ├── frankfurter-errors.test.ts
+│   │   ├── frankfurter-metadata.test.ts
 │   │   ├── frankfurter-service.test.ts
 │   │   └── server-config.test.ts
 │   ├── tools/
 │   │   ├── canvas-id-input.test.ts
+│   │   ├── fx-batch-observations.test.ts
 │   │   ├── fx-cancellation.test.ts
 │   │   ├── fx-convert-currency.tool.test.ts
 │   │   ├── fx-dataframe-describe.tool.test.ts
@@ -216,7 +226,9 @@ exchange-rates-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

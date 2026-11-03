@@ -29,7 +29,13 @@ let http: FetchMockHarness | undefined;
 
 /** Route the service's fetches by URL, answering each with a JSON body. */
 const stubFetch = (routes: Array<[RegExp, unknown]>): void => {
-  http = createFetchMock(routes.map(([match, body]) => ({ match, respond: Response.json(body) })));
+  http = createFetchMock([
+    ...routes.map(([match, body]) => ({ match, respond: Response.json(body) })),
+    {
+      match: /\/v2\/currencies\?scope=all&providers=ECB$/,
+      respond: new Response(null, { status: 503 }),
+    },
+  ]);
   http.install();
 };
 
@@ -236,8 +242,10 @@ describe('getRate', () => {
         { code: 'USD', name: 'US Dollar' },
       ],
       as_of: '2024-06-03',
+      notice:
+        'Optional official ECB coverage metadata is unavailable; current v1 discovery is preserved, but coverage dates and additional retired currencies cannot be supplied.',
     });
-    expect(requestedUrls()).toHaveLength(2);
+    expect(requestedUrls()).toHaveLength(3);
   });
 
   it('dates an identity rate to the ECB publication day, flagging the snap like any other pair', async () => {
@@ -560,7 +568,10 @@ describe('unsupported currency rejection', () => {
         rejected_codes: ['ARS'],
       },
     });
-    expect(requestedUrls().every((url) => url.endsWith('/currencies'))).toBe(true);
+    expect(requestedUrls()).toEqual([
+      `${getServerConfig().frankfurterBaseUrl}/currencies`,
+      'https://api.frankfurter.dev/v2/currencies?scope=all&providers=ECB',
+    ]);
   });
 
   it('lists the accepted set once for several rejected symbols, blaming symbols alone', async () => {

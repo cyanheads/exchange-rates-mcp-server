@@ -136,9 +136,12 @@ export const fxGetRate = tool('fx_get_rate', {
       if (failure?.reason === 'upstream_no_data') {
         throw ctx.fail(
           'upstream_no_data',
-          `Frankfurter v1 returned no ${input.base_currency}/${input.quote_currency} rate for ${
-            date === 'latest' ? 'the latest business day' : date
-          }.`,
+          failure.missing_codes
+            ? (err as Error).message
+            : `Frankfurter v1 returned no ${input.base_currency}/${input.quote_currency} rate for ${
+                date === 'latest' ? 'the latest business day' : date
+              }.`,
+          { ...failure },
         );
       }
       throw err;

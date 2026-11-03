@@ -56,6 +56,92 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
     await canvas.shutdown(createMockContext());
   });
 
+  it.each([
+    { supplied: false, limit: 0 },
+    { supplied: false, limit: 1 },
+    { supplied: false, limit: 999 },
+    { supplied: true, limit: 0 },
+    { supplied: true, limit: 1 },
+    { supplied: true, limit: 999 },
+  ])(
+    'bounds the $supplied staged preview at limit=$limit while preserving full data and notices',
+    async ({ supplied, limit }) => {
+      const tenantId = `preview-${supplied}-${limit}`;
+      const ctx = createMockContext({ tenantId });
+      const existing = supplied ? await canvas.acquire(undefined, ctx) : undefined;
+      getTimeSeries.mockResolvedValueOnce({
+        rows,
+        startDate,
+        endDate,
+        missingCoverage: { count: 3, firstDate: '2020-01-02', lastDate: '2020-01-04' },
+      });
+      const result = await runToolContract(
+        fxGetTimeseries,
+        {
+          base_currency: 'USD',
+          quote_currency: 'EUR',
+          start_date: startDate,
+          end_date: endDate,
+          limit,
+          ...(existing && { canvas_id: existing.canvasId }),
+        },
+        { context: { tenantId } },
+      );
+      expect(result.isError).toBeFalsy();
+      const data = result.structuredContent as {
+        rates: Record<string, number>;
+        canvas_id: string;
+        table_name: string;
+        notice: string;
+      };
+      expect(data).toMatchObject({
+        rate_count: 1000,
+        spilled: true,
+        truncated: true,
+        summary: { mean: 1.0000842, last: { rate: 1.0842, date: endDate } },
+      });
+      expect(data).not.toHaveProperty('next_start_date');
+      expect(Object.keys(data.rates).length).toBeLessThanOrEqual(Math.min(limit, 500));
+      if (limit < 2) expect(Object.keys(data.rates)).toHaveLength(limit);
+      const text = result.content.map((block) => (block as { text: string }).text).join('\n');
+      expect(text.match(/^\d{4}-\d{2}-\d{2}(?=: )/gm) ?? []).toEqual(Object.keys(data.rates));
+      for (const surface of [data.notice, text]) {
+        expect(surface).toContain('3 served publication days');
+        expect(surface).toContain('observed days only');
+        expect(surface).toContain('Staged 1000 rows');
+        if (limit === 999) expect(surface).toContain('clamped to 500');
+      }
+      const instance = await canvas.acquire(data.canvas_id, ctx);
+      expect(
+        (await instance.query(`SELECT count(*)::INTEGER AS n FROM ${data.table_name}`)).rows,
+      ).toEqual([{ n: 1000 }]);
+    },
+  );
+
+  it('does not turn an inline-fit range into automatic staging for limit zero', async () => {
+    const tenantId = 'summary-inline-fit';
+    getTimeSeries.mockResolvedValueOnce({ rows: rows.slice(0, 2), startDate, endDate });
+    const result = await runToolContract(
+      fxGetTimeseries,
+      {
+        base_currency: 'USD',
+        quote_currency: 'EUR',
+        start_date: startDate,
+        end_date: endDate,
+        limit: 0,
+      },
+      { context: { tenantId } },
+    );
+    expect(result.structuredContent).toMatchObject({
+      rates: {},
+      rate_count: 2,
+      spilled: false,
+      truncated: true,
+      next_start_date: startDate,
+    });
+    expect(registry.countForTenant(tenantId)).toBe(0);
+  });
+
   it('stages rate as DOUBLE when the leading rates are whole numbers', async () => {
     const ctx = createMockContext({ errors: fxGetTimeseries.errors });
     const result = await fxGetTimeseries.handler(

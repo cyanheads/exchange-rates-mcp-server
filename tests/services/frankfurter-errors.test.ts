@@ -106,6 +106,17 @@ describe('frankfurter failures', () => {
     expect(failureOf(error)).toEqual({ reason: 'upstream_no_data' });
   });
 
+  it('preserves sorted deduplicated missing observations through the typed reader', () => {
+    const error = upstreamNoData('symbols', ['JPY', 'ISK', 'ISK']);
+    expect(failureOf(error)).toEqual({
+      reason: 'upstream_no_data',
+      field: 'symbols',
+      missing_codes: ['ISK', 'JPY'],
+    });
+    expect(error.message).toContain('symbols: ISK, JPY');
+    expect(unsupportedCurrencyCodesOf(error)).toBeUndefined();
+  });
+
   /**
    * `McpError.data` reaches the client as `structuredContent.error.data`, so the
    * upstream request URL — which carries the caller's codes and dates alongside
