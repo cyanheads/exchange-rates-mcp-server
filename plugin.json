@@ -1,0 +1,31 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "exchange-rates-mcp-server",
+  "version": "0.5.1",
+  "description": "Convert currencies, get FX rates, and query historical Frankfurter v1 exchange rate data via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/exchange-rates-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/exchange-rates-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "exchange-rates",
+    "currency-conversion",
+    "fx",
+    "forex",
+    "ecb",
+    "frankfurter",
+    "fiat",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "ai-agent"
+  ]
+}
