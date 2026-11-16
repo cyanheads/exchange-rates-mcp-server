@@ -9,6 +9,7 @@ import {
   type CanvasInstance,
   type QueryResult,
 } from '@cyanheads/mcp-ts-core/canvas';
+import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
 import { escapeMarkdownTableCell } from '@/utils/escape-markdown-table-cell.js';
@@ -19,8 +20,13 @@ import { escapeMarkdownTableCell } from '@/utils/escape-markdown-table-cell.js';
  * is ~19 KB on the wire — inside the framework's 24 KB outline budget, where 200 is not.
  */
 const DEFAULT_ROW_LIMIT = 150;
-/** DataCanvas's own materialization ceiling — raising row_limit can never exceed an unbounded query. */
-const MAX_ROW_LIMIT = 10_000;
+
+/** The canvas layer stamps a contract `reason` and recovery hint on its own throws — read those, don't match prose. */
+const dataOf = (err: unknown) =>
+  err instanceof McpError
+    ? (err.data as { reason?: string; recovery?: { hint?: string } } | undefined)
+    : undefined;
+const reasonOf = (err: unknown) => dataOf(err)?.reason;
 
 export const fxDataframeQuery = tool('fx_dataframe_query', {
   description:
@@ -52,7 +58,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
       .min(1)
       .default(DEFAULT_ROW_LIMIT)
       .describe(
-        `Most rows to return (positive integer, default ${DEFAULT_ROW_LIMIT}; values above ${MAX_ROW_LIMIT} clamp to ${MAX_ROW_LIMIT} with a notice). When the query ` +
+        `Most rows to return (positive integer, default ${DEFAULT_ROW_LIMIT}); values above the canvas row cap (10,000 by default) clamp to it with a notice. When the query ` +
           'produces more, truncated is true — page with ORDER BY <column> LIMIT <n> OFFSET <m> in the ' +
           'SQL, or aggregate, rather than raising this toward the maximum.',
       ),
@@ -113,21 +119,23 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     {
       reason: 'invalid_query',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'SQL is not a SELECT, references unknown columns, or has a syntax error.',
-      recovery: 'Run fx_dataframe_describe first to verify table and column names.',
+      when: 'SQL is not one read-only SELECT over the staged tables (a write, a file read, a denied function, a syntax error, an unknown column) or fails on the staged values.',
+      recovery: 'fx_dataframe_describe lists the staged tables and their columns.',
     },
   ],
 
   async handler(input, ctx) {
-    const rowLimit = Math.min(input.row_limit, MAX_ROW_LIMIT);
     const canvas = getCanvas();
     if (!canvas) {
       throw serviceUnavailable('DataCanvas is not enabled. Set CANVAS_PROVIDER_TYPE=duckdb.');
     }
-
-    /** The canvas layer stamps a contract `reason` on its own throws — read that, don't match prose. */
-    const reasonOf = (err: unknown): string | undefined =>
-      err instanceof McpError ? (err.data as { reason?: string } | undefined)?.reason : undefined;
+    /**
+     * The canvas refuses any rowLimit above its configured cap (CANVAS_DEFAULT_ROW_LIMIT), so
+     * clamp to that cap, the default included, rather than fail. Read per call: the config
+     * proxy parses on first access, after any `.env` has loaded.
+     */
+    const rowCap = config.canvas.defaultRowLimit;
+    const rowLimit = Math.min(input.row_limit, rowCap);
 
     let instance: CanvasInstance;
     try {
@@ -164,7 +172,19 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
         msg.includes('does not exist') ||
         (err as { code?: string }).code === 'ValidationError'
       ) {
-        throw ctx.fail('invalid_query', `SQL query rejected: ${msg}`);
+        /**
+         * The gate's hint fits its refusal (a denied function, a file, a non-SELECT, the
+         * engine's error class); the declared recovery follows it, naming the describe tool.
+         * Without one, the framework puts the declared recovery on the wire alone.
+         */
+        const gateHint = dataOf(err)?.recovery?.hint;
+        const declared = ctx.recoveryFor('invalid_query').recovery.hint;
+        throw ctx.fail(
+          'invalid_query',
+          `SQL query rejected: ${msg}`,
+          gateHint === undefined ? undefined : { recovery: { hint: `${gateHint} ${declared}` } },
+          { cause: err },
+        );
       }
       throw err;
     }
@@ -177,8 +197,8 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     });
 
     const clampNotice =
-      input.row_limit > MAX_ROW_LIMIT
-        ? `Requested row_limit ${input.row_limit} was clamped to ${rowLimit}. `
+      input.row_limit > rowCap
+        ? `row_limit ${input.row_limit} was clamped to this server's row cap of ${rowLimit}. `
         : '';
     if (truncated) {
       ctx.enrich.notice(
