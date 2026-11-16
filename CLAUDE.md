@@ -2,8 +2,8 @@
 
 **Server:** exchange-rates-mcp-server
 **Version:** 0.6.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
@@ -44,15 +44,16 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ## Patterns
 
-Rates use one unfiltered EUR snapshot/range per request: divide quote leg by base leg locally without intermediate rounding (EUR = 1); conversion amounts retain the unrounded JavaScript-number product. Historical membership uses raw served data before inclusive clipping, including retired currencies; latest membership uses current discovery. `fx_list_currencies` adds retired discovery with `include_retired`; `fx://currencies` stays current-only. Both expose `as_of` from the latest served rate date and optional official ECB coverage outer bounds, never proof against interior gaps. V1 membership determines retirement, not metadata end_date. Metadata is optional, official-base-only, cached daily, bounded to one second with no retries, and never required for a successful rate call. Discovery discloses unavailable metadata. V1 reads share a 12-second deadline across retries. Provenance is literally `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; never infer individual providers from v1 payloads. Currency values are trimmed and uppercased; advertised date patterns are metadata so handler-level typed date errors remain reachable. Preserve field/missing_codes for absent observations through every upstream_no_data rethrow; generic 404 failures carry no invented attribution.
+Rates use one unfiltered EUR snapshot/range per request: divide quote leg by base leg locally without intermediate rounding (EUR = 1); conversion amounts retain the unrounded JavaScript-number product. Historical membership uses raw served data before inclusive clipping, including retired currencies; latest membership uses current discovery. `fx_list_currencies` adds retired discovery with `include_retired`, marking appended rows `retired: true`; `fx://currencies` stays current-only. Both expose `as_of`, read uncached from `/latest?base=EUR` on every call so it matches a latest-rate call's `rate_date` (the currency list and metadata keep their day-long caches), and optional official ECB coverage outer bounds, never proof against interior gaps. V1 membership determines retirement, not metadata end_date. Metadata is optional, official-base-only, cached daily (a failed read retries after five minutes), bounded to one second with no retries, and never required for a successful rate call. Discovery discloses unavailable metadata. V1 reads share a 12-second deadline across retries. Provenance is literally `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; never infer individual providers from v1 payloads. Currency values are trimmed and uppercased; advertised date patterns are metadata so handler-level typed date errors remain reachable. Preserve field/missing_codes/currency_windows for absent observations through every upstream_no_data rethrow; generic 404 failures carry no invented attribution. A snapped date has three causes (weekend, TARGET holiday, the day's fix not yet published), so snap wording from `src/mcp-server/tools/date-snap.ts` names all three and asserts none.
 
-`fx_get_timeseries` computes full-range observed-day summary before delivery. Count each clipped served day missing either leg once, retaining count and first/last dates in composed coverage/delivery notices; weekends, holidays and prior snapped dates never count. `limit` defaults/clamps to 500, accepts 0 for summary only, and bounds delivery after spill eligibility without affecting summary/count/bounds or full staged tables. Inline zero-limit continuation points to the first observation and requires a positive limit to advance; staged continuation stays SQL-only. Empty ranges omit summary; extrema ties use the earliest date. The arithmetic daily mean is not an accounting-policy prescription. Explicit `canvas_id` always stages, including empty/short ranges, with `rate DOUBLE`; every registration gets a unique pair-name suffix and preserves prior tables. Unknown IDs fail `canvas_not_found`, disabled explicit staging fails `canvas_unavailable`. Implicit inline results release newly acquired unused canvases; supplied canvases remain caller-owned. `fx_dataframe_query` defaults to 150 rows and clamps over-cap positive integers to 10,000 with composed clamp/truncation notices.
+`fx_get_timeseries` computes full-range observed-day summary before delivery. Count each clipped served day missing either leg once, retaining count and first/last dates in composed coverage/delivery notices; weekends, holidays and prior snapped dates never count. `limit` defaults/clamps to 500, accepts 0 for summary only, and bounds delivery after spill eligibility without affecting summary/count/bounds or full staged tables. Inline zero-limit continuation points to the first observation and requires a positive limit to advance; staged continuation stays SQL-only. Empty ranges omit summary; extrema ties use the earliest date. The arithmetic daily mean is not an accounting-policy prescription. Explicit `canvas_id` or `stage: true` (a new canvas, whose `canvas_id` the caller passes for the next series) always stages, including empty/short ranges, with `rate DOUBLE`; every registration gets a unique pair-name suffix and preserves prior tables. Unknown IDs fail `canvas_not_found`, disabled explicit staging fails `canvas_unavailable`. Preview overflow is measured before any canvas is acquired, so inline-fit series never acquire one (pending cyanheads/mcp-ts-core#501); a failed or cancelled staging call releases its newly acquired canvas, and supplied canvases remain caller-owned. `fx_dataframe_query` defaults to 150 rows and clamps over-cap positive integers to the configured canvas row cap (`CANVAS_DEFAULT_ROW_LIMIT`, 10,000 by default) with composed clamp/truncation notices.
 
 ### Tool
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { DATE_SNAPPED_DESCRIPTION, dateSnapNote } from '@/mcp-server/tools/date-snap.js';
 import { getFrankfurterService } from '@/services/frankfurter/frankfurter-service.js';
 
 export const fxGetRate = tool('fx_get_rate', {
@@ -69,7 +70,7 @@ export const fxGetRate = tool('fx_get_rate', {
   output: z.object({
     rate: z.number().describe('Exchange rate: units of quote per 1 unit of base.'),
     rate_date: z.string().describe('Actual date of the rate returned.'),
-    date_snapped: z.boolean().describe('True when the API snapped a weekend/holiday to the prior business day.'),
+    date_snapped: z.boolean().describe(DATE_SNAPPED_DESCRIPTION),
     rate_type: z.string().describe('Always "Daily rate (Frankfurter v1)".'),
     source: z.string().describe('Always "Frankfurter v1".'),
   }),
@@ -90,7 +91,7 @@ export const fxGetRate = tool('fx_get_rate', {
   format: (r) => [{
     type: 'text',
     text: `${r.rate_date}: 1 ${r.base_currency ?? '?'} = ${r.rate} ${r.quote_currency ?? '?'}` +
-          (r.date_snapped ? ' (snapped to prior business day)' : '') +
+          (r.date_snapped ? `\n${dateSnapNote(r.rate_date)}` : '') +
           `\nRate type: ${r.rate_type} | Source: ${r.source}`,
   }],
 });
@@ -134,7 +135,7 @@ const ServerConfigSchema = z.object({
   frankfurterBaseUrl: z.string().url().default('https://api.frankfurter.dev/v1')
     .describe('Frankfurter API base URL.'),
   timeseriesCanvasThresholdDays: z.coerce.number().default(90)
-    .describe('Day count above which fx_get_timeseries considers automatic DataCanvas staging; without canvas_id, inline-fit series remain inline.'),
+    .describe('Day count above which fx_get_timeseries considers automatic DataCanvas staging; without canvas_id or stage: true, series that fit the preview remain inline.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
@@ -264,6 +265,7 @@ src/
       frankfurter-service.ts           # Frankfurter HTTP client — getRate, getRates, getTimeSeries, listCurrencies
       types.ts                         # Domain types (ResolvedRate, SeriesRow, TimeSeriesResult, …)
   mcp-server/
+    tools/date-snap.ts                 # Date-snap wording (date_snapped description, snap note) shared by the three point-rate tools
     tools/definitions/
       fx-convert-currency.tool.ts      # Convert amount between two currencies
       fx-get-rate.tool.ts              # Exchange rate for a currency pair
@@ -348,7 +350,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Commands
 
-**Dependency hold:** `@duckdb/node-api` stays on `^1.5.6-r.2` until `cyanheads/mcp-ts-core#800` is fixed. DuckDB 2 emits `PRAGMA_SHOW` for `SHOW <table>`, which the framework SQL gate refuses; the same call works on 1.5.
+**Dependency hold:** `@duckdb/node-api` stays on `^1.5.6-r.2` until `cyanheads/mcp-ts-core#870` is resolved. The canvas provider's `SET threads` cap does not reach DuckDB 2's `async_threads` pool, so each live canvas instance holds about 4×cores threads (about 3 on 1.5), and a process holding many canvases can reach the OS per-process thread limit.
 
 **Runtime:** Scripts use Bun's native TypeScript execution — `bun run <cmd>` is the standard invocation. `npm run <cmd>` also works (npm delegates to bun).
 
@@ -382,7 +384,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 `.mcpbignore` uses root-anchored lines for source, scripts, tests, docs, changelog sources, caches, agent docs, and plugin metadata. Root `skills/` remains included. The cleaner also removes node-gyp build intermediates and framework build-only files. Its agent-doc selector matches package-root trees only: runtime modules such as `@modelcontextprotocol/server/dist/ext/skills/` must remain in the archive.
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. DataCanvas defaults to DuckDB here (`src/index.ts` sets `CANVAS_PROVIDER_TYPE` to `duckdb` when it is unset or empty), but the bundle ships without the DuckDB native, so `manifest.json` pins `CANVAS_PROVIDER_TYPE` to `none`: the bundle is inline-only — `fx_dataframe_*` stay out of `tools/list` and `fx_get_timeseries` pages every range inline. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `AGENTS.md`, and `CLAUDE.md` at a package's root, and `SKILL.md` anywhere — a `skills/` deeper in a package is runtime code and stays) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. DataCanvas defaults to DuckDB here (`src/index.ts` sets `CANVAS_PROVIDER_TYPE` to `duckdb` when it is unset or empty), but the bundle ships without the DuckDB native, so `manifest.json` pins `CANVAS_PROVIDER_TYPE` to `none`: the bundle is inline-only — `fx_dataframe_*` stay out of `tools/list` and `fx_get_timeseries` pages every range inline. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, that every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"` (the host substitutes nothing else — `"${X}"` reaches the server as that literal string), and that an optional string option carries `"default": ""`.
 

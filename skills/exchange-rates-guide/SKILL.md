@@ -4,7 +4,7 @@ description: Analyze historical FX periods with fx_* tools, discover retired cur
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
@@ -13,7 +13,7 @@ Use this keyless server for Frankfurter v1 daily reference-rate analysis. For a 
 
 ## Identifiers
 
-Resolve ambiguous currency names through fx_list_currencies. Its retired-currency discovery adds historical codes; fx://currencies remains current-only. Coverage dates, when available, are outer bounds: an interior date can still lack a rate. If discovery reports unavailable coverage metadata, leave coverage unknown.
+Resolve ambiguous currency names through fx_list_currencies. Its retired-currency discovery adds historical codes, each marked retired: true; read that flag, not end_date, for retirement. fx://currencies remains current-only. Coverage dates, when available, are outer bounds: an interior date can still lack a rate, and an upstream_no_data failure for a current currency carries currency_windows and names the bound that applies. If discovery reports unavailable coverage metadata, leave coverage unknown.
 
 Take canvas_id and table_name from a staged fx_get_timeseries response. Each registration creates a unique table name; never construct it from the currency pair. Use fx_dataframe_describe to discover the exact names and column types before SQL.
 
@@ -38,7 +38,7 @@ For historical analysis, resolve the currency codes and available coverage, then
 
 With DataCanvas enabled, results too large to return inline are staged as a DataCanvas table, and the response carries a canvas_id. Call fx_dataframe_describe with it for the staged table and column names before writing SQL, then fx_dataframe_query with a read-only query. Pass the same canvas_id back to stage further results beside the first; the tables expire with the canvas.
 
-**Compare series.** Once a response supplies a real canvas handle, pass it to subsequent fx_get_timeseries calls to stage the other series beside the first, including short ranges. A guessed canvas ID cannot create a workspace. If automatic staging has not supplied a handle, use inline observations for the comparison. With DataCanvas unavailable, continue inline pages.
+**Compare series.** Request the first series with stage: true, which stages it on a new canvas even for a short range and returns the canvas_id. Pass that canvas_id, not stage again, to each subsequent fx_get_timeseries call so the other series land beside it; fx_dataframe_query reads one canvas at a time. A guessed canvas ID cannot create a workspace. If automatic staging already supplied a handle, reuse it. With DataCanvas unavailable, stage fails, so continue inline pages.
 
 For monthly comparisons, describe both tables, then replace the quoted placeholders below with their exact returned names. The inner join compares common observation dates; compare its day counts with each series before drawing a full-period conclusion.
 

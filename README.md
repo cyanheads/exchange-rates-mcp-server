@@ -44,7 +44,7 @@ Daily exchange rates from Frankfurter v1, with current currency discovery and hi
 | `fx_dataframe_query` | Run a read-only SQL SELECT against a staged DataCanvas table |
 | `fx_dataframe_drop` | Remove one staged DataCanvas table or view (opt-in, destructive) |
 
-DataCanvas (DuckDB) is on by default. Set `CANVAS_PROVIDER_TYPE=none` to turn it off: the three `fx_dataframe_*` tools then drop out of `tools/list`, and `fx_get_timeseries` returns ranges inline when `canvas_id` is omitted; explicit staging fails `canvas_unavailable`. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native binding, so it runs with DataCanvas off. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
+DataCanvas (DuckDB) is on by default. Set `CANVAS_PROVIDER_TYPE=none` to turn it off: the three `fx_dataframe_*` tools then drop out of `tools/list`, and `fx_get_timeseries` returns ranges inline when `canvas_id` and `stage` are omitted; explicit staging (`canvas_id` or `stage: true`) fails `canvas_unavailable`. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native binding, so it runs with DataCanvas off. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
 
 The four rate and conversion tools accept `base` as an alias of `base_currency`; pair tools also accept `quote` for `quote_currency`. Send either spelling for a field, never both. Advertised schemas use the canonical names.
 
@@ -69,19 +69,19 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx_list_currencies` <sub>tool</sub>
 
-- Optional `include_retired` (default `false`) adds historical codes absent from current v1 discovery
-- Returns `currencies: [{ code, name, start_date?, end_date? }]`, `count`, `source` and `as_of` (the latest served daily rate date), sorted alphabetically by code. Coverage dates come from optional official ECB metadata and describe outer bounds, not uninterrupted availability. A dated `end_date` does not itself imply retirement.
-- Metadata is cached for a day and queried only for the default official v1 base. Unavailable metadata leaves current discovery intact with a notice; valid v1 rate requests never depend on metadata.
-- Default discovery lists current currencies; `include_retired: true` adds historical codes when metadata is available. Historical requests validate against their unfiltered EUR snapshot or raw served range, so retired codes remain usable on dates where they have observations. Unknown codes fail `unsupported_currency` with sorted accepted/rejected codes and the input field; current currencies without historical observations fail `upstream_no_data`.
+- Optional `include_retired` (default `false`) adds historical codes absent from current v1 discovery; the rows it appends carry `retired: true`
+- Returns `currencies: [{ code, name, start_date?, end_date?, retired }]`, `count`, `source` and `as_of` (the latest served daily rate date, read uncached on every call so it matches the `rate_date` of a latest-rate call), sorted alphabetically by code. Coverage dates come from optional official ECB metadata and describe outer bounds, not uninterrupted availability. Read `retired`, not `end_date`, for retirement.
+- Metadata is cached for a day (a failed read is retried after five minutes) and queried only for the default official v1 base. Unavailable metadata leaves current discovery intact with a notice; valid v1 rate requests never depend on metadata.
+- Default discovery lists current currencies; `include_retired: true` adds historical codes when metadata is available. Historical requests validate against their unfiltered EUR snapshot or raw served range, so retired codes remain usable on dates where they have observations. Unknown codes fail `unsupported_currency` with sorted accepted/rejected codes and the input field; current currencies without historical observations fail `upstream_no_data`, with `currency_windows` and a sentence naming the coverage bound when ECB coverage metadata is available.
 
 ---
 
 ### `fx_get_rates` <sub>tool</sub>
 
 - `base_currency` required; `date` optional (default latest, history from 1999-01-04, no future dates); optional `symbols` array narrows the response and must name at least one code
-- Returns a `rates` map (quote code → rate), the actual `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
+- Returns a `rates` map (quote code → rate), the actual `rate_date`, and `date_snapped: true` when a weekend, a holiday, or a day whose fix is not yet published snapped to the prior published date
 - Naming the base currency in `symbols` is valid — answered locally with a rate of 1 rather than sent upstream
-- Missing observations from a served snapshot identify the offending `field` and sorted, deduplicated `missing_codes`; unknown currencies retain `unsupported_currency` precedence. A response without any snapshot remains an unattributed `upstream_no_data` failure.
+- Missing observations from a served snapshot identify the offending `field` and sorted, deduplicated `missing_codes`, plus `currency_windows` and a sentence naming the bound (coverage begins or ends, or a date or range inside the bounds that can contain gaps) when ECB coverage metadata is available; unknown currencies retain `unsupported_currency` precedence. A response without any snapshot remains an unattributed `upstream_no_data` failure.
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
@@ -89,7 +89,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 ### `fx_get_rate` <sub>tool</sub>
 
 - `base_currency`, `quote_currency` required; `date` optional (default latest, history from 1999-01-04, no future dates)
-- Returns `rate`, `rate_date`, and `date_snapped: true` when a weekend/holiday request snapped to the prior business day
+- Returns `rate`, `rate_date`, and `date_snapped: true` when a weekend, a holiday, or a day whose fix is not yet published snapped to the prior published date
 - Every pair uses quote EUR leg / base EUR leg from one unfiltered EUR snapshot without intermediate rounding; EUR's leg is 1. Same-currency pairs return 1 only on actual observation dates.
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
@@ -107,14 +107,15 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 ### `fx_get_timeseries` <sub>tool</sub>
 
 - `base_currency`, `quote_currency`, `start_date`, `end_date` required (history from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
+- Optional `stage` (default `false`): `true` stages the complete series on a new canvas whose `canvas_id` is returned, even for short or empty ranges. To stage another series beside it, pass that `canvas_id` rather than `stage: true` again, since `fx_dataframe_query` reads one canvas at a time. `canvas_id` always stages, whatever `stage` says.
 - Optional integer `limit` (default 500, minimum 0) bounds returned observations, clamping values above 500 with a notice. `limit: 0` returns summary and metadata with empty `rates`; a nonempty inline result then points `next_start_date` at the first observation. Repeat with a positive limit to advance. Counts, summary, bounds, staging eligibility and complete staged tables are independent of the limit.
 - Inline results page at up to 500 observed publication days — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
 - Ranges over `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` (default 90 days) are considered for DataCanvas staging. Series over the 40,000-character preview budget return `spilled: true`, `canvas_id`, and `table_name`; smaller series and deployments with `CANVAS_PROVIDER_TYPE=none` page inline
 - A same-currency pair returns 1 on actual observation dates. Every non-identity row requires both EUR legs on that same date; missing legs never fabricate observations. Membership uses all raw served dates before inclusive clipping, preserving weekend-only empty windows.
 - Missing either leg on a served in-window day produces a notice with the affected day count and first/last dates. Each day counts once, even if both legs are absent; weekends, holidays and clipped prior dates do not count. Statistics cover observed days only. Coverage and delivery notices coexist; `truncated` describes omitted observations in delivery, not missing upstream coverage.
-- An empty range (only weekends/holidays) returns `rate_count: 0` with an explanatory `notice`, distinguishable from an error
-- Long ranges that fit the inline preview release their newly acquired canvas; failed or cancelled staging does too. A supplied canvas remains available.
-- An explicit `canvas_id` always stages the complete result, including short and empty ranges, using `rate DOUBLE`. Each table name has a fresh identifier suffix; repeated and concurrent calls preserve all earlier tables. Unknown IDs fail `canvas_not_found`; disabled DataCanvas fails `canvas_unavailable`. `truncated` is false when the preview includes every observation.
+- An empty range (weekends, holidays, a fix not yet published, or currency gaps) returns `rate_count: 0` with an explanatory `notice`, distinguishable from an error
+- Whether a long range overflows the preview is measured before any canvas is acquired, so a series that fits inline never acquires one (pending cyanheads/mcp-ts-core#501); a failed or cancelled staging call releases the canvas it acquired. A supplied canvas remains available.
+- An explicit `canvas_id` or `stage: true` always stages the complete result, including short and empty ranges, using `rate DOUBLE`. Each table name has a fresh identifier suffix; repeated and concurrent calls preserve all earlier tables. Unknown IDs fail `canvas_not_found`, whose recovery names `stage: true`; disabled DataCanvas fails `canvas_unavailable`. `truncated` is false when the preview includes every observation.
 - Nonempty results include `summary: { mean, min: { rate, date }, max: { rate, date }, first: { rate, date }, last: { rate, date }, change_pct }`. It covers all observations in the requested interval before paging or staging; a continuation summarizes its shorter requested interval. Tied extrema select the earliest date; singleton and identity movement is 0. Empty series omit summary. Mean is the unweighted arithmetic average of daily observations, not a tax-authority or accounting-policy prescription.
 
 ---
@@ -130,7 +131,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx_dataframe_query` <sub>tool</sub>
 
-- `canvas_id` and a read-only SQL `query` required; `row_limit` is a positive integer (default 150). Values above 10,000 clamp to 10,000 with requested/effective values in a notice; clamping and truncation notices coexist and paging guidance uses the effective limit.
+- `canvas_id` and a read-only SQL `query` required; `row_limit` is a positive integer (default 150). Values above the canvas row cap (`CANVAS_DEFAULT_ROW_LIMIT`, 10,000 by default) clamp to it, the default 150 included, with requested/effective values in a notice; clamping and truncation notices coexist and paging guidance uses the effective limit.
 - Supports aggregations, GROUP BY, window functions, and JOINs across tables from multiple `fx_get_timeseries` calls
 - Returns at most `row_limit` rows; `truncated: true` plus a `notice` give the `ORDER BY <column> LIMIT <n> OFFSET <m>` shape for the next page — ORDER BY is required for stable paging
 - Markdown table cells are escaped so pipes, angle brackets, and line breaks stay inside their cell; `structuredContent` keeps raw values
@@ -168,13 +169,13 @@ Rate data:
 
 - Keyless daily data via [Frankfurter v1](https://www.frankfurter.dev/v1/)
 - Local cross-rate calculation from one unfiltered EUR data request per snapshot or range; the same response supplies historical membership
-- Weekend/holiday date semantics: `date_snapped` surfaces when the API returns a different date than requested
+- Date-snap semantics: `date_snapped` surfaces when the API returns a different date than requested, whether the day was a weekend, a holiday, or a day whose fix is not yet published
 - Identity rates are computed locally as 1 on the currency's observed publication dates
 - Long time-series that exceed the inline preview budget stage on DataCanvas (DuckDB, on by default) for SQL aggregation over the full range
 
 Agent-friendly output:
 
-- Rate provenance on every response — `rate_type`, `source`, `rate_date`, and `date_snapped` so agents can reason about trust and freshness
+- Rate provenance on every rate response — `rate_type` and `source`, plus `rate_date` and `date_snapped` on point lookups, so agents can reason about trust and freshness
 - Structured error contracts — typed `reason` fields (`unsupported_currency`, `date_out_of_range`, `invalid_query`, …) let callers branch on failure type, not string parsing
 - Bounded responses — inline time-series pages continue from `next_start_date`, and SQL results cap at `row_limit`, so no call returns an unbounded payload
 - Success-path `notice` enrichment — explains an empty series, where to continue a paged series, or which tools read a staged one, so a legitimate zero-result never reads as a failure
@@ -254,7 +255,7 @@ Or with Docker:
 }
 ```
 
-DataCanvas (DuckDB) is on by default for long time-series SQL analytics. To turn it off, add `CANVAS_PROVIDER_TYPE=none`: the dataframe tools drop out of `tools/list`, and `fx_get_timeseries` pages inline when `canvas_id` is omitted. Explicit staging fails `canvas_unavailable`.
+DataCanvas (DuckDB) is on by default for long time-series SQL analytics. To turn it off, add `CANVAS_PROVIDER_TYPE=none`: the dataframe tools drop out of `tools/list`, and `fx_get_timeseries` pages inline when `canvas_id` and `stage` are omitted. Explicit staging (`canvas_id` or `stage: true`) fails `canvas_unavailable`.
 
 ```json
 {
@@ -281,7 +282,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 - No API key — Frankfurter is free and keyless.
 
 ### Installation
@@ -320,7 +321,7 @@ All configuration is validated at startup via Zod schemas. Environment variables
 | Variable | Description | Default |
 |:---------|:------------|:--------|
 | `FRANKFURTER_BASE_URL` | Frankfurter API base URL. Override for local testing or a self-hosted instance. | `https://api.frankfurter.dev/v1` |
-| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` considers automatic DataCanvas staging; without `canvas_id`, series that fit the preview remain inline. Explicit `canvas_id` always requests staging. | `90` |
+| `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` | Day range above which `fx_get_timeseries` considers automatic DataCanvas staging; without `canvas_id` or `stage: true`, series that fit the preview remain inline. Explicit `canvas_id` or `stage: true` always requests staging. | `90` |
 | `FX_ENABLE_CANVAS_DROP` | Enable the destructive `fx_dataframe_drop` tool. Off by default: the tool is not registered and is absent from `tools/list`. | `false` |
 | `CANVAS_PROVIDER_TYPE` | Canvas engine. `duckdb` enables DataCanvas for `fx_get_timeseries` long-range spillover and registers the three `fx_dataframe_*` tools; `none` disables it and skips them from `tools/list`. An empty value takes the default. The `.mcpb` bundle sets `none`. | `duckdb` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
