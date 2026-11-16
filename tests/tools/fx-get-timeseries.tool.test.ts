@@ -3,7 +3,8 @@
  * @module tests/tools/fx-get-timeseries.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { z } from '@cyanheads/mcp-ts-core';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxGetTimeseries } from '@/mcp-server/tools/definitions/fx-get-timeseries.tool.js';
 import * as canvasModule from '@/services/canvas/canvas-accessor.js';
@@ -68,6 +69,7 @@ describe('fx_get_timeseries', () => {
         quote_currency: 'EUR',
         start_date: '2024-06-03',
         end_date: '2024-06-04',
+        stage: false,
       },
       ctx,
     );
@@ -93,6 +95,70 @@ describe('fx_get_timeseries', () => {
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 
+  describe('stage input', () => {
+    const shortInput = {
+      base_currency: 'USD',
+      quote_currency: 'EUR',
+      start_date: '2024-06-03',
+      end_date: '2024-06-04',
+    };
+    const shortRows = [
+      { date: '2024-06-03', rate: 0.91 },
+      { date: '2024-06-04', rate: 0.92 },
+    ];
+
+    it('defaults to false, advertises that default, and rejects a non-boolean', () => {
+      expect(fxGetTimeseries.input.parse(shortInput)).toEqual({ ...shortInput, stage: false });
+      expect(fxGetTimeseries.input.safeParse({ ...shortInput, stage: 'yes' }).success).toBe(false);
+      const schema = z.toJSONSchema(fxGetTimeseries.input, { io: 'input' }) as unknown as {
+        properties: Record<string, { type?: string; default?: unknown; description?: string }>;
+      };
+      expect(schema.properties.stage).toMatchObject({ type: 'boolean', default: false });
+      expect(schema.properties.stage?.description).toBe(
+        'true stages the complete series even when short or empty: on canvas_id when given, otherwise on a new canvas whose canvas_id is returned. To stage another series beside it, pass that canvas_id rather than stage: true again, since fx_dataframe_query reads one canvas at a time. false keeps automatic staging; canvas_id always stages.',
+      );
+    });
+
+    it('omitted or false leaves a short range inline and never touches the canvas', async () => {
+      const acquire = vi.fn();
+      mockGetCanvas.mockReturnValue({ acquire } as unknown as ReturnType<
+        typeof canvasModule.getCanvas
+      >);
+      mockGetTimeSeries.mockResolvedValue(
+        buildSeriesResponse('2024-06-03', '2024-06-04', shortRows),
+      );
+      const omitted = await runToolContract(fxGetTimeseries, shortInput);
+      const off = await runToolContract(fxGetTimeseries, { ...shortInput, stage: false });
+      expect(off).toEqual(omitted);
+      expect(off.structuredContent).toMatchObject({
+        spilled: false,
+        truncated: false,
+        rate_count: 2,
+        rates: { '2024-06-03': 0.91, '2024-06-04': 0.92 },
+      });
+      expect(off.structuredContent).not.toHaveProperty('canvas_id');
+      expect(acquire).not.toHaveBeenCalled();
+    });
+
+    it('fails canvas_unavailable with DataCanvas off, naming both staging inputs', async () => {
+      mockGetTimeSeries.mockResolvedValue(
+        buildSeriesResponse('2024-06-03', '2024-06-04', shortRows),
+      );
+      const result = await runToolContract(fxGetTimeseries, { ...shortInput, stage: true });
+      expect(result.isError).toBe(true);
+      const hint =
+        'Enable DataCanvas with CANVAS_PROVIDER_TYPE=duckdb, or omit both canvas_id and stage for inline results.';
+      const error = (
+        result.structuredContent as { error: { message: string; data: Record<string, unknown> } }
+      ).error;
+      expect(error.message).toBe('Explicit staging requires DataCanvas on this server.');
+      expect(error.data).toMatchObject({ reason: 'canvas_unavailable', recovery: { hint } });
+      const text = result.content.map((block) => (block as { text: string }).text).join('\n');
+      expect(text).toContain(hint);
+      expect(mockGetTimeSeries).not.toHaveBeenCalled();
+    });
+  });
+
   it('returns an empty series with a notice when the range holds no publication day', async () => {
     // Saturday-only window: the service clips Frankfurter's snap back to 2024-05-31 away.
     mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2024-06-01', '2024-06-01', []));
@@ -104,6 +170,7 @@ describe('fx_get_timeseries', () => {
         quote_currency: 'EUR',
         start_date: '2024-06-01',
         end_date: '2024-06-01',
+        stage: false,
       },
       ctx,
     );
@@ -114,7 +181,9 @@ describe('fx_get_timeseries', () => {
     // The echoed window never leaks the prior business day the upstream snapped to.
     expect(result.start_date).toBe('2024-06-01');
     expect(result.end_date).toBe('2024-06-01');
-    expect(getEnrichment(ctx).notice).toContain('Weekends');
+    expect(getEnrichment(ctx).notice).toBe(
+      'Frankfurter v1 returned no USD/EUR observation between 2024-06-01 and 2024-06-01. Weekends, holidays, a fix not yet published and currency-specific gaps can leave a valid window empty. Widen the range to look for publication days.',
+    );
   });
 
   it('never echoes a date outside the requested range', async () => {
@@ -134,6 +203,7 @@ describe('fx_get_timeseries', () => {
         quote_currency: 'EUR',
         start_date: '2024-06-01',
         end_date: '2024-06-05',
+        stage: false,
       },
       ctx,
     );
@@ -166,6 +236,7 @@ describe('fx_get_timeseries', () => {
         quote_currency: 'USD',
         start_date: '2024-06-03',
         end_date: '2024-06-05',
+        stage: false,
       },
       ctx,
     );
@@ -198,6 +269,7 @@ describe('fx_get_timeseries', () => {
         quote_currency: 'EUR',
         start_date: '2023-01-02',
         end_date: rows[129]!.date,
+        stage: false,
       },
       ctx,
     );
@@ -220,6 +292,7 @@ describe('fx_get_timeseries', () => {
           quote_currency: 'EUR',
           start_date: '1990-01-01',
           end_date: '2024-01-01',
+          stage: false,
         },
         ctx,
       ),
@@ -235,6 +308,7 @@ describe('fx_get_timeseries', () => {
           quote_currency: 'EUR',
           start_date: '2024-06-04',
           end_date: '2024-06-01',
+          stage: false,
         },
         ctx,
       ),
@@ -251,7 +325,10 @@ describe('fx_get_timeseries', () => {
       mockGetTimeSeries.mockRejectedValue(unsupportedCurrency(field, ['XYZ'], accepted));
       const ctx = createMockContext({ errors: fxGetTimeseries.errors });
       await expect(
-        fxGetTimeseries.handler({ ...pair, start_date: '2024-01-01', end_date: '2024-06-01' }, ctx),
+        fxGetTimeseries.handler(
+          { ...pair, start_date: '2024-01-01', end_date: '2024-06-01', stage: false },
+          ctx,
+        ),
       ).rejects.toMatchObject({
         data: {
           accepted_codes: accepted,
@@ -273,6 +350,7 @@ describe('fx_get_timeseries', () => {
           quote_currency: 'EUR',
           start_date: '2024-6-1',
           end_date: '2024-06-10',
+          stage: false,
         },
         ctx,
       ),
@@ -294,26 +372,33 @@ describe('fx_get_timeseries', () => {
           quote_currency: 'EUR',
           start_date: '2024-06-01',
           end_date: '2024-06-31',
+          stage: false,
         },
         ctx,
       ),
     ).rejects.toMatchObject({ data: { field: 'end_date', reason: 'invalid_date_format' } });
   });
 
-  it('throws upstream_no_data when the ECB published no rates across the range', async () => {
+  /** A bodiless 404 names no code, so the tool's message names the pair and range it asked for. */
+  it('throws upstream_no_data when the ECB published no rates across the range, naming the pair and range on both surfaces', async () => {
     mockGetTimeSeries.mockRejectedValue(upstreamNoData());
-    const ctx = createMockContext({ errors: fxGetTimeseries.errors });
-    await expect(
-      fxGetTimeseries.handler(
-        {
-          base_currency: 'ILS',
-          quote_currency: 'EUR',
-          start_date: '2000-01-04',
-          end_date: '2000-02-04',
-        },
-        ctx,
-      ),
-    ).rejects.toMatchObject({ data: { reason: 'upstream_no_data' } });
+    const message = 'Frankfurter v1 returned no ILS/EUR rates between 2000-01-04 and 2000-02-04.';
+    const result = await runToolContract(fxGetTimeseries, {
+      base_currency: ' ils ',
+      quote_currency: 'eur',
+      start_date: '2000-01-04',
+      end_date: '2000-02-04',
+    });
+    expect(result.isError).toBe(true);
+    const error = (
+      result.structuredContent as { error: { message: string; data: Record<string, unknown> } }
+    ).error;
+    expect(error.message).toBe(message);
+    expect(error.data).toMatchObject({ reason: 'upstream_no_data' });
+    expect(error.data).not.toHaveProperty('missing_codes');
+    expect(result.content.map((block) => (block as { text: string }).text).join('\n')).toContain(
+      message,
+    );
   });
 
   it('format renders spilled=false correctly', () => {
@@ -339,13 +424,14 @@ describe('fx_get_timeseries', () => {
     expect(text).not.toContain('next_start_date');
   });
 
-  it('spills to canvas when range exceeds threshold and canvas is enabled', async () => {
-    // Build a 130-day series (> default 90-day threshold)
-    const rows = Array.from({ length: 130 }, (_, i) => ({
+  it('spills to canvas when range exceeds threshold and preview budget and canvas is enabled', async () => {
+    // A 600-day series: past the default 90-day threshold and the 40,000-character preview budget.
+    const rows = Array.from({ length: 600 }, (_, i) => ({
       date: new Date(Date.UTC(2023, 0, 2 + i)).toISOString().slice(0, 10),
       rate: 0.9 + i * 0.001,
     }));
-    mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2023-01-02', rows[129]!.date, rows));
+    const last = rows.at(-1)!.date;
+    mockGetTimeSeries.mockResolvedValue(buildSeriesResponse('2023-01-02', last, rows));
 
     const mockInstance = {
       canvasId: 'abc1234567',
@@ -362,7 +448,7 @@ describe('fx_get_timeseries', () => {
     vi.mocked(canvasCore.spillover).mockResolvedValue({
       spilled: true,
       previewRows: rows.slice(0, 5),
-      handle: { tableName: 'fx_usd_eur', rowCount: 130 },
+      handle: { tableName: 'fx_usd_eur', rowCount: 600 },
       truncated: false,
     } as unknown as Awaited<ReturnType<typeof canvasCore.spillover>>);
 
@@ -372,7 +458,8 @@ describe('fx_get_timeseries', () => {
         base_currency: 'USD',
         quote_currency: 'EUR',
         start_date: '2023-01-02',
-        end_date: rows[129]!.date,
+        end_date: last,
+        stage: false,
       },
       ctx,
     );
@@ -380,7 +467,7 @@ describe('fx_get_timeseries', () => {
     expect(result.spilled).toBe(true);
     expect(result.canvas_id).toBe('abc1234567');
     expect(result.table_name).toBe('fx_usd_eur');
-    expect(result.rate_count).toBe(130);
+    expect(result.rate_count).toBe(600);
     expect(Object.keys(result.rates)).toHaveLength(5);
     expect(result.truncated).toBe(true);
     expect(result.next_start_date).toBeUndefined();
@@ -395,7 +482,7 @@ describe('fx_get_timeseries', () => {
     const notice = getEnrichment(ctx).notice as string;
     expect(notice).toContain('abc1234567');
     expect(notice).toContain('fx_usd_eur');
-    expect(notice).toContain('130 rows');
+    expect(notice).toContain('600 rows');
     expect(notice.indexOf('fx_dataframe_describe')).toBeGreaterThan(-1);
     expect(notice.indexOf('fx_dataframe_describe')).toBeLessThan(
       notice.indexOf('fx_dataframe_query'),
@@ -475,7 +562,7 @@ describe('fx_get_timeseries inline pagination', () => {
   const call = async (start_date: string, end_date = CALENDAR_END) => {
     const ctx = createMockContext({ errors: fxGetTimeseries.errors });
     const result = await fxGetTimeseries.handler(
-      { base_currency: 'USD', quote_currency: 'EUR', start_date, end_date },
+      { base_currency: 'USD', quote_currency: 'EUR', start_date, end_date, stage: false },
       ctx,
     );
     const text = (fxGetTimeseries.format!(result)[0] as { text: string }).text;

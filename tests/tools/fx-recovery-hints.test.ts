@@ -37,8 +37,15 @@ const mockDrop = vi.fn();
 const mockGetCanvas = vi.spyOn(canvasModule, 'getCanvas');
 
 const ACCEPTED = ['EUR', 'GBP', 'USD'];
+/** The registry's own throw, generic hint included — each tool's declared hint must replace it. */
 const expiredCanvas = () =>
-  notFound('Canvas not found or expired.', { canvasId: 'abc1234567', reason: 'canvas_not_found' });
+  notFound('Canvas not found or expired.', {
+    canvasId: 'abc1234567',
+    reason: 'canvas_not_found',
+    recovery: {
+      hint: 'Re-run the tool that produced this canvas_id to stage fresh data, or verify the id was copied correctly.',
+    },
+  });
 
 /** Wire `getCanvas()` to a live instance whose query/drop are the mocks above. */
 const withCanvas = () => {
@@ -114,6 +121,20 @@ const cases: HintCase[] = [
     tool: fxGetTimeseries,
     reason: 'canvas_unavailable',
     input: { base_currency: 'USD', quote_currency: 'EUR', ...rateWindow, canvas_id: 'abc1234567' },
+    setup: () => {
+      mockGetTimeSeries.mockResolvedValue({
+        rows: [],
+        startDate: rateWindow.start_date,
+        endDate: rateWindow.end_date,
+      });
+      mockGetCanvas.mockReturnValue(undefined);
+    },
+  },
+  {
+    name: 'stage: true with DataCanvas disabled',
+    tool: fxGetTimeseries,
+    reason: 'canvas_unavailable',
+    input: { base_currency: 'USD', quote_currency: 'EUR', ...rateWindow, stage: true },
     setup: () => {
       mockGetTimeSeries.mockResolvedValue({
         rows: [],
@@ -268,6 +289,38 @@ const cases: HintCase[] = [
     },
   },
 ];
+
+describe('upstream_no_data contract', () => {
+  const pointRecovery =
+    "Request a date inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range with fx_get_timeseries to find observed dates.";
+  it.each([
+    [
+      fxGetRate,
+      'Both currencies are supported but Frankfurter v1 has no observation for a requested currency on this date.',
+      pointRecovery,
+    ],
+    [
+      fxConvertCurrency,
+      'Both currencies are supported but Frankfurter v1 has no observation for a requested currency on this date.',
+      pointRecovery,
+    ],
+    [
+      fxGetRates,
+      'Every requested currency is supported but Frankfurter v1 has no observation for a requested currency on this date.',
+      pointRecovery,
+    ],
+    [
+      fxGetTimeseries,
+      'Both currencies are supported but Frankfurter v1 has no observation for a requested currency across this range.',
+      "Request a range inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range to find observed dates.",
+    ],
+  ] as const)('%s points at coverage bounds and their gaps', (tool, when, recovery) => {
+    expect(tool.errors?.find((entry) => entry.reason === 'upstream_no_data')).toMatchObject({
+      when,
+      recovery,
+    });
+  });
+});
 
 describe('declared recovery hints on the wire', () => {
   beforeEach(() => {

@@ -246,6 +246,9 @@ describe('observed FX regressions', () => {
     for (const surface of [wire.structuredContent, wire.content]) {
       expect(JSON.stringify(surface)).toContain('3 served publication days');
       expect(JSON.stringify(surface)).toContain('clamped to 500');
+      expect(JSON.stringify(surface)).toContain(
+        'Weekends, holidays, a fix not yet published and currency-specific gaps can leave a valid window empty.',
+      );
       expect(JSON.stringify(surface)).toContain('Widen the range');
     }
   });
@@ -280,34 +283,57 @@ describe('observed FX regressions', () => {
     },
   );
 
+  const pointRecovery =
+    "Request a date inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range with fx_get_timeseries to find observed dates.";
   it.each([
-    [fxGetRates, { base_currency: 'ISK', date: '2012-06-01', symbols: ['USD'] }, 'base_currency'],
+    [
+      fxGetRates,
+      { base_currency: 'ISK', date: '2012-06-01', symbols: ['USD'] },
+      'base_currency',
+      pointRecovery,
+    ],
     [
       fxGetRate,
       { base_currency: 'USD', quote_currency: 'ISK', date: '2012-06-01' },
       'quote_currency',
+      pointRecovery,
     ],
     [
       fxConvertCurrency,
       { base_currency: 'USD', quote_currency: 'ISK', date: '2012-06-01', amount: 1 },
       'quote_currency',
+      pointRecovery,
     ],
-    [fxGetTimeseries, { ...window, quote_currency: 'ISK' }, 'quote_currency'],
-  ] as const)('retains absent-leg attribution through $0.name', async (tool, input, field) => {
-    const wire = await runToolContract(tool as typeof fxGetRate, input as never);
-    expect(wire.structuredContent).toMatchObject({
-      error: {
-        data: {
-          reason: 'upstream_no_data',
-          field,
-          missing_codes: ['ISK'],
-          recovery: { hint: expect.any(String) },
+    [
+      fxGetTimeseries,
+      { ...window, quote_currency: 'ISK' },
+      'quote_currency',
+      "Request a range inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range to find observed dates.",
+    ],
+  ] as const)(
+    'retains absent-leg attribution through $0.name with metadata unavailable',
+    async (tool, input, field, recovery) => {
+      const wire = await runToolContract(tool as typeof fxGetRate, input as never);
+      const message = `Frankfurter v1 returned no observation for ${field}: ISK.`;
+      expect(wire.structuredContent).toMatchObject({
+        error: {
+          message,
+          data: {
+            reason: 'upstream_no_data',
+            field,
+            missing_codes: ['ISK'],
+            recovery: { hint: recovery },
+          },
         },
-      },
-    });
-    expect(JSON.stringify(wire.content)).toContain(field);
-    expect(JSON.stringify(wire.content)).toContain('ISK');
-  });
+      });
+      expect((wire.structuredContent as { error: { data: object } }).error.data).not.toHaveProperty(
+        'currency_windows',
+      );
+      const text = wire.content.map((block) => (block as { text: string }).text).join('\n');
+      expect(text).toContain(message);
+      expect(text).toContain(recovery);
+    },
+  );
 
   it('preserves unknown-code precedence over a known missing base', async () => {
     const wire = await runToolContract(fxGetRates, {

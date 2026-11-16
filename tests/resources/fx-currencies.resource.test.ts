@@ -17,9 +17,9 @@ describe('fxCurrenciesResource', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListCurrencies.mockResolvedValue([
-      { code: 'EUR', name: 'Euro' },
-      { code: 'USD', name: 'United States Dollar' },
-      { code: 'GBP', name: 'British Pound Sterling' },
+      { code: 'EUR', name: 'Euro', retired: false },
+      { code: 'USD', name: 'United States Dollar', retired: false },
+      { code: 'GBP', name: 'British Pound Sterling', retired: false },
     ]);
   });
 
@@ -33,6 +33,14 @@ describe('fxCurrenciesResource', () => {
     expect(result.as_of).toBe('2024-06-03');
     expect(result.source).toBe('Frankfurter v1');
     expect(result.currencies[0]).toMatchObject({ code: 'EUR', name: 'Euro' });
+  });
+
+  it('serves no retired key, since the resource is current-only', async () => {
+    const result = await fxCurrenciesResource.handler({}, createMockContext());
+    /** The framework serves a read through this output schema. */
+    const served = fxCurrenciesResource.output!.parse(result);
+    expect(served.currencies).toHaveLength(3);
+    for (const currency of served.currencies) expect(currency).not.toHaveProperty('retired');
   });
 
   it('lists available resources', async () => {

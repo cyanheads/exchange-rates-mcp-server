@@ -3,7 +3,7 @@
  * @module tests/tools/fx-get-rates.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxGetRates } from '@/mcp-server/tools/definitions/fx-get-rates.tool.js';
 import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/errors.js';
@@ -221,13 +221,35 @@ describe('fx_get_rates', () => {
     expect(mockGetRates).not.toHaveBeenCalled();
   });
 
-  it('throws upstream_no_data when the ECB published no rates for the date', async () => {
-    mockGetRates.mockRejectedValue(upstreamNoData());
-    const ctx = createMockContext({ errors: fxGetRates.errors });
-    await expect(
-      fxGetRates.handler({ base_currency: 'ILS', date: '2000-01-04' }, ctx),
-    ).rejects.toMatchObject({ data: { reason: 'upstream_no_data' } });
-  });
+  /** A bodiless 404 names no code, so the tool's message names the base and date it asked for. */
+  it.each([
+    {
+      when: 'a dated request',
+      input: { base_currency: 'ILS', date: '2000-01-04' },
+      message: 'Frankfurter v1 returned no ILS rates for 2000-01-04.',
+    },
+    {
+      when: 'a latest request with a padded lowercase base',
+      input: { base_currency: ' ils ' },
+      message: 'Frankfurter v1 returned no ILS rates for the latest published date.',
+    },
+  ])(
+    'throws upstream_no_data when the ECB published no rates for $when, naming the base on both surfaces',
+    async ({ input, message }) => {
+      mockGetRates.mockRejectedValue(upstreamNoData());
+      const result = await runToolContract(fxGetRates, input);
+      expect(result.isError).toBe(true);
+      const error = (
+        result.structuredContent as { error: { message: string; data: Record<string, unknown> } }
+      ).error;
+      expect(error.message).toBe(message);
+      expect(error.data).toMatchObject({ reason: 'upstream_no_data' });
+      expect(error.data).not.toHaveProperty('missing_codes');
+      expect(result.content.map((block) => (block as { text: string }).text).join('\n')).toContain(
+        message,
+      );
+    },
+  );
 
   describe('format', () => {
     const output = {
@@ -257,7 +279,7 @@ describe('fx_get_rates', () => {
       const text = formatText({ ...output, rate_date: '2024-05-31', date_snapped: true });
 
       expect(text).toContain(
-        '⚠️ *Requested date snapped to 2024-05-31 (weekend/holiday — daily observations may skip non-publication days)*',
+        "⚠️ *Requested date snapped to 2024-05-31: no rate was published for the requested date (weekend, holiday, or the day's fix not yet released)*",
       );
     });
   });

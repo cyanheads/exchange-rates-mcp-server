@@ -4,7 +4,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxConvertCurrency } from '@/mcp-server/tools/definitions/fx-convert-currency.tool.js';
 import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/errors.js';
@@ -121,16 +121,35 @@ describe('fx_convert_currency', () => {
     expect(mockGetRate).not.toHaveBeenCalled();
   });
 
-  it('throws upstream_no_data when the ECB published no rate for the date', async () => {
-    mockGetRate.mockRejectedValue(upstreamNoData());
-    const ctx = createMockContext({ errors: fxConvertCurrency.errors });
-    await expect(
-      fxConvertCurrency.handler(
-        { base_currency: 'ILS', quote_currency: 'EUR', amount: 1, date: '2000-01-04' },
-        ctx,
-      ),
-    ).rejects.toMatchObject({ data: { reason: 'upstream_no_data' } });
-  });
+  /** A bodiless 404 names no code, so the tool's message names the pair and date it asked for. */
+  it.each([
+    {
+      when: 'a dated request',
+      input: { base_currency: 'ILS', quote_currency: 'EUR', amount: 1, date: '2000-01-04' },
+      message: 'Frankfurter v1 returned no ILS/EUR rate for 2000-01-04.',
+    },
+    {
+      when: 'a latest request with padded lowercase codes',
+      input: { base_currency: ' ils ', quote_currency: 'eur', amount: 1 },
+      message: 'Frankfurter v1 returned no ILS/EUR rate for the latest published date.',
+    },
+  ])(
+    'throws upstream_no_data when the ECB published no rate for $when, naming the pair on both surfaces',
+    async ({ input, message }) => {
+      mockGetRate.mockRejectedValue(upstreamNoData());
+      const result = await runToolContract(fxConvertCurrency, input);
+      expect(result.isError).toBe(true);
+      const error = (
+        result.structuredContent as { error: { message: string; data: Record<string, unknown> } }
+      ).error;
+      expect(error.message).toBe(message);
+      expect(error.data).toMatchObject({ reason: 'upstream_no_data' });
+      expect(error.data).not.toHaveProperty('missing_codes');
+      expect(result.content.map((block) => (block as { text: string }).text).join('\n')).toContain(
+        message,
+      );
+    },
+  );
 
   describe('amount contract', () => {
     const validInput = { base_currency: 'USD', quote_currency: 'EUR' };
@@ -170,5 +189,24 @@ describe('fx_convert_currency', () => {
     expect(text).toContain('100 USD');
     expect(text).toContain('92 EUR');
     expect(text).toContain('0.92');
+    expect(text).not.toContain('snapped');
+  });
+
+  it('format renders the snap note naming the published date when snapped', () => {
+    const content = fxConvertCurrency.format!({
+      base_currency: 'JPY',
+      quote_currency: 'USD',
+      base_amount: 45000,
+      quote_amount: 290.25,
+      rate: 0.00645,
+      rate_date: '2026-11-13',
+      date_snapped: true,
+      rate_type: 'Daily rate (Frankfurter v1)',
+      source: 'Frankfurter v1',
+    });
+    const text = (content[0] as { text: string }).text;
+    expect(text.split('\n')).toContain(
+      "⚠️ *Requested date snapped to 2026-11-13: no rate was published for the requested date (weekend, holiday, or the day's fix not yet released)*",
+    );
   });
 });

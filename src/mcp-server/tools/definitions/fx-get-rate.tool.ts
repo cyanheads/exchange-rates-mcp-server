@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { DATE_SNAPPED_DESCRIPTION, dateSnapNote } from '@/mcp-server/tools/date-snap.js';
 import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
@@ -16,12 +17,7 @@ import type { ResolvedRate } from '@/services/frankfurter/types.js';
 export const fxGetRate = tool('fx_get_rate', {
   inputAliases: { base: 'base_currency', quote: 'quote_currency' },
   description:
-    'Get the exchange rate for a currency pair on a given date (default: latest). ' +
-    'Returns the rate, the actual rate date (which may differ from the requested date on ' +
-    'weekends/holidays — daily observations may skip non-publication days), and source provenance. ' +
-    'Cross-rates are triangulated through EUR automatically. A same-currency pair returns a rate of 1, ' +
-    'dated to the same publication day any other pair would report for that date. ' +
-    'Use fx_convert_currency when you want the converted amount; use this tool when you only need the rate number.',
+    'Get the exchange rate for a currency pair on a given date (default: latest). Returns the rate, the actual rate date (the prior published date when none was published for the requested date), and source provenance. Cross-rates are triangulated through EUR automatically. A same-currency pair returns a rate of 1, dated to the same publication day any other pair would report for that date. Use fx_convert_currency when you want the converted amount; use this tool when you only need the rate number.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -55,12 +51,7 @@ export const fxGetRate = tool('fx_get_rate', {
       .number()
       .describe('Exchange rate: units of quote currency per 1 unit of base currency.'),
     rate_date: z.string().describe('Actual date of the rate returned.'),
-    date_snapped: z
-      .boolean()
-      .describe(
-        'True when the API returned a different date than requested — ' +
-          'Frankfurter v1 snaps weekend/holiday requests to the prior business day.',
-      ),
+    date_snapped: z.boolean().describe(DATE_SNAPPED_DESCRIPTION),
     rate_type: z
       .string()
       .describe(
@@ -91,8 +82,9 @@ export const fxGetRate = tool('fx_get_rate', {
     {
       reason: 'upstream_no_data',
       code: JsonRpcErrorCode.NotFound,
-      when: 'Both currencies are supported but the Frankfurter v1 published no rate for this date.',
-      recovery: 'Try a more recent date — Frankfurter v1 history starts later for some currencies.',
+      when: 'Both currencies are supported but Frankfurter v1 has no observation for a requested currency on this date.',
+      recovery:
+        "Request a date inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range with fx_get_timeseries to find observed dates.",
     },
   ],
 
@@ -138,8 +130,8 @@ export const fxGetRate = tool('fx_get_rate', {
           'upstream_no_data',
           failure.missing_codes
             ? (err as Error).message
-            : `Frankfurter v1 returned no ${input.base_currency}/${input.quote_currency} rate for ${
-                date === 'latest' ? 'the latest business day' : date
+            : `Frankfurter v1 returned no ${input.base_currency.trim().toUpperCase()}/${input.quote_currency.trim().toUpperCase()} rate for ${
+                date === 'latest' ? 'the latest published date' : date
               }.`,
           { ...failure },
         );
@@ -167,9 +159,7 @@ export const fxGetRate = tool('fx_get_rate', {
   },
 
   format: (result) => {
-    const snapNote = result.date_snapped
-      ? `\n⚠️ *Requested date snapped to ${result.rate_date} (weekend/holiday — daily observations may skip non-publication days)*`
-      : '';
+    const snapNote = result.date_snapped ? `\n${dateSnapNote(result.rate_date)}` : '';
     return [
       {
         type: 'text',

@@ -12,9 +12,11 @@ import {
   DataCanvas,
   DEFAULT_CANVAS_REGISTRY_OPTIONS,
   DuckdbProvider,
+  spillover,
 } from '@cyanheads/mcp-ts-core/canvas';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fxGetTimeseries } from '@/mcp-server/tools/definitions/fx-get-timeseries.tool.js';
 import { setCanvas } from '@/services/canvas/canvas-accessor.js';
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
@@ -51,6 +53,12 @@ vi.spyOn(serviceModule, 'getFrankfurterService').mockReturnValue({
 setCanvas(canvas);
 
 describe('fx_get_timeseries on a DuckDB canvas', () => {
+  /** A queued series a failed call never consumed must not leak into the next test. */
+  beforeEach(() => {
+    getTimeSeries.mockReset();
+    getTimeSeries.mockResolvedValue({ rows, startDate, endDate });
+  });
+
   afterAll(async () => {
     setCanvas(undefined);
     await canvas.shutdown(createMockContext());
@@ -145,7 +153,13 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
   it('stages rate as DOUBLE when the leading rates are whole numbers', async () => {
     const ctx = createMockContext({ errors: fxGetTimeseries.errors });
     const result = await fxGetTimeseries.handler(
-      { base_currency: 'USD', quote_currency: 'EUR', start_date: startDate, end_date: endDate },
+      {
+        base_currency: 'USD',
+        quote_currency: 'EUR',
+        start_date: startDate,
+        end_date: endDate,
+        stage: false,
+      },
       ctx,
     );
     expect(result.spilled).toBe(true);
@@ -162,29 +176,19 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
     const existing = await canvas.acquire(undefined, ctx);
     await existing.registerTable('keep', [{ sentinel: 'preserved' }]);
     getTimeSeries.mockResolvedValueOnce({ rows: rows.slice(0, 2), startDate, endDate });
-    const result = await fxGetTimeseries.handler(
-      {
-        base_currency: 'USD',
-        quote_currency: 'EUR',
-        start_date: startDate,
-        end_date: endDate,
-        canvas_id: existing.canvasId,
-      },
-      ctx,
-    );
+    const input = {
+      base_currency: 'USD',
+      quote_currency: 'EUR',
+      start_date: startDate,
+      end_date: endDate,
+      canvas_id: existing.canvasId,
+      stage: false,
+    };
+    const result = await fxGetTimeseries.handler(input, ctx);
     expect(result.spilled).toBe(true);
     expect(result.truncated).toBe(false);
     expect(result.table_name).toMatch(/^fx_usd_eur_[a-z0-9]+$/);
-    const again = await fxGetTimeseries.handler(
-      {
-        base_currency: 'USD',
-        quote_currency: 'EUR',
-        start_date: startDate,
-        end_date: endDate,
-        canvas_id: existing.canvasId,
-      },
-      ctx,
-    );
+    const again = await fxGetTimeseries.handler(input, ctx);
     expect(again.table_name).not.toBe(result.table_name);
     expect(
       (await existing.query(`SELECT count(*)::INTEGER AS n FROM ${result.table_name}`)).rows,
@@ -264,6 +268,253 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
     },
   );
 
+  /** A two-day window: far under the spill threshold, so only explicit staging can stage it. */
+  const shortWindow = { start_date: '2020-01-01', end_date: '2020-01-02' };
+  const shortSeries = (count: number) => ({
+    rows: rows.slice(0, count),
+    startDate: shortWindow.start_date,
+    endDate: shortWindow.end_date,
+  });
+  const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((block) => (block as { text: string }).text).join('\n');
+
+  it.each([0, 1, 2])(
+    'stage: true without canvas_id stages %s rows on one new retained canvas',
+    async (count) => {
+      const tenantId = `stage-${count}`;
+      getTimeSeries.mockResolvedValueOnce(shortSeries(count));
+      const result = await runToolContract(
+        fxGetTimeseries,
+        { base_currency: 'USD', quote_currency: 'EUR', ...shortWindow, stage: true },
+        { context: { tenantId } },
+      );
+      expect(result.isError).toBeFalsy();
+      const data = result.structuredContent as {
+        canvas_id: string;
+        table_name: string;
+        rates: Record<string, number>;
+        notice: string;
+      };
+      expect(data).toMatchObject({ spilled: true, truncated: false, rate_count: count });
+      expect(data).not.toHaveProperty('next_start_date');
+      expect(data.table_name).toMatch(/^fx_usd_eur_[0-9a-f]{32}$/);
+      expect(Object.keys(data.rates)).toEqual(rows.slice(0, count).map((row) => row.date));
+      expect(registry.countForTenant(tenantId)).toBe(1);
+
+      const instance = await canvas.acquire(data.canvas_id, createMockContext({ tenantId }));
+      const table = (await instance.describe()).find((t) => t.name === data.table_name);
+      expect(table?.rowCount).toBe(count);
+      expect(table?.columns.find((column) => column.name === 'rate')?.type).toBe('DOUBLE');
+      for (const surface of [data.notice, textOf(result)]) {
+        expect(surface).toContain(data.canvas_id);
+        expect(surface).toContain(data.table_name);
+      }
+    },
+  );
+
+  it('stage: true with limit 0 stages the full series and returns only the summary', async () => {
+    const tenantId = 'stage-limit-zero';
+    getTimeSeries.mockResolvedValueOnce(shortSeries(2));
+    const result = await runToolContract(
+      fxGetTimeseries,
+      { base_currency: 'USD', quote_currency: 'EUR', ...shortWindow, stage: true, limit: 0 },
+      { context: { tenantId } },
+    );
+    const data = result.structuredContent as { canvas_id: string; table_name: string };
+    expect(data).toMatchObject({
+      spilled: true,
+      rates: {},
+      rate_count: 2,
+      truncated: true,
+      summary: { mean: 1, first: { date: '2020-01-01' }, last: { date: '2020-01-02' } },
+    });
+    expect(data).not.toHaveProperty('next_start_date');
+    const instance = await canvas.acquire(data.canvas_id, createMockContext({ tenantId }));
+    expect(
+      (await instance.query(`SELECT count(*)::INTEGER AS n FROM ${data.table_name}`)).rows,
+    ).toEqual([{ n: 2 }]);
+    expect(registry.countForTenant(tenantId)).toBe(1);
+  });
+
+  it.each([false, true])(
+    'stage: %s beside canvas_id behaves exactly as canvas_id alone',
+    async (stage) => {
+      const tenantId = `stage-beside-${stage}`;
+      const ctx = createMockContext({ tenantId });
+      const existing = await canvas.acquire(undefined, ctx);
+      await existing.registerTable('keep', [{ sentinel: 'preserved' }]);
+      const input = {
+        base_currency: 'USD',
+        quote_currency: 'EUR',
+        ...shortWindow,
+        canvas_id: existing.canvasId,
+      };
+      getTimeSeries.mockResolvedValueOnce(shortSeries(2)).mockResolvedValueOnce(shortSeries(2));
+      const alone = await runToolContract(fxGetTimeseries, input, { context: { tenantId } });
+      const beside = await runToolContract(
+        fxGetTimeseries,
+        { ...input, stage },
+        { context: { tenantId } },
+      );
+      const tableOf = (result: typeof alone) =>
+        (result.structuredContent as { table_name: string }).table_name;
+      /** Each registration takes a fresh table suffix; everything else must match. */
+      const normalized = (result: typeof alone) =>
+        JSON.parse(
+          JSON.stringify({ data: result.structuredContent, text: result.content }).replaceAll(
+            tableOf(result),
+            '<table>',
+          ),
+        );
+      expect(beside.isError).toBeFalsy();
+      expect(normalized(beside)).toEqual(normalized(alone));
+      expect(beside.structuredContent).toMatchObject({
+        spilled: true,
+        canvas_id: existing.canvasId,
+      });
+      expect(registry.countForTenant(tenantId)).toBe(1);
+      expect((await existing.query('SELECT * FROM keep')).rows).toEqual([
+        { sentinel: 'preserved' },
+      ]);
+    },
+  );
+
+  it('stage: true without canvas_id at the tenant canvas cap fails capacity, never inline', async () => {
+    const tenantId = 'stage-at-cap';
+    const ctx = createMockContext({ tenantId });
+    await canvas.acquire(undefined, ctx);
+    await canvas.acquire(undefined, ctx);
+    getTimeSeries.mockResolvedValueOnce(shortSeries(2));
+    const result = await runToolContract(
+      fxGetTimeseries,
+      { base_currency: 'USD', quote_currency: 'EUR', ...shortWindow, stage: true },
+      { context: { tenantId } },
+    );
+    expect(result.isError).toBe(true);
+    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
+    const hint =
+      'Pass a canvas_id you already hold instead of omitting it to create another, or retry once idle canvases pass their TTL.';
+    expect(error.data).toMatchObject({
+      reason: 'canvas_capacity_exhausted',
+      retryable: true,
+      recovery: { hint },
+    });
+    expect(textOf(result)).toContain(hint);
+    expect(registry.countForTenant(tenantId)).toBe(2);
+  });
+
+  it('answers an inline-fit range past the threshold at the tenant canvas cap', async () => {
+    const tenantId = 'implicit-at-cap';
+    const ctx = createMockContext({ tenantId });
+    await canvas.acquire(undefined, ctx);
+    await canvas.acquire(undefined, ctx);
+    getTimeSeries.mockResolvedValueOnce({ rows: rows.slice(0, 2), startDate, endDate });
+    const result = await runToolContract(
+      fxGetTimeseries,
+      { base_currency: 'USD', quote_currency: 'EUR', start_date: startDate, end_date: endDate },
+      { context: { tenantId } },
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      spilled: false,
+      truncated: false,
+      rate_count: 2,
+      rates: { [rows[0]!.date]: 1, [rows[1]!.date]: 1 },
+    });
+    expect(registry.countForTenant(tenantId)).toBe(2);
+  });
+
+  /**
+   * The tool decides overflow before acquiring a canvas, by spillover()'s own measure:
+   * the running sum of each row's JSON length against the 40,000-character preview budget.
+   * Rows totalling exactly the budget fit; one character more overflows. Both sides are
+   * also checked against spillover() itself, so a change in the framework's measure fails here.
+   */
+  describe('preview budget boundary', () => {
+    const PREVIEW_BUDGET = 40_000;
+    const chars = (series: readonly object[]) =>
+      series.reduce((total, row) => total + JSON.stringify(row).length, 0);
+    /** A rate whose JSON form is `extra` characters longer than `1`'s (1 ≤ extra ≤ 14). */
+    const widened = (extra: number) => (extra === 1 ? 10 : Number(`1.${'1'.repeat(extra - 1)}`));
+    /** Over-threshold rows (dates from the 1,000-day series) whose JSON totals exactly `total`. */
+    const totalling = (total: number) => {
+      const unit = JSON.stringify(rows[0]).length;
+      let rest = total % unit;
+      return rows.slice(0, Math.floor(total / unit)).map((row) => {
+        const extra = Math.min(rest, 14);
+        rest -= extra;
+        return extra === 0 ? { ...row, rate: 1 } : { ...row, rate: widened(extra) };
+      });
+    };
+    const fit = totalling(PREVIEW_BUDGET);
+    const overflow = totalling(PREVIEW_BUDGET + 1);
+    const input = {
+      base_currency: 'USD',
+      quote_currency: 'EUR',
+      start_date: startDate,
+      end_date: endDate,
+    };
+
+    it('builds series exactly at and one character past the budget', () => {
+      expect(chars(fit)).toBe(PREVIEW_BUDGET);
+      expect(chars(overflow)).toBe(PREVIEW_BUDGET + 1);
+      expect(overflow).toHaveLength(fit.length);
+    });
+
+    it('matches spillover() on both sides of the budget', async () => {
+      const unused = {
+        registerTable: vi.fn().mockRejectedValue(new Error('fit must not register')),
+      } as unknown as Parameters<typeof spillover>[0]['canvas'];
+      expect(
+        (await spillover({ canvas: unused, source: fit, previewChars: PREVIEW_BUDGET })).spilled,
+      ).toBe(false);
+      const ctx = createMockContext({ tenantId: 'boundary-probe' });
+      const probe = await canvas.acquire(undefined, ctx);
+      try {
+        const spilled = await spillover({
+          canvas: probe,
+          source: overflow,
+          previewChars: PREVIEW_BUDGET,
+        });
+        expect(spilled.spilled).toBe(true);
+      } finally {
+        await canvas.drop(probe.canvasId, ctx);
+      }
+    });
+
+    it('pages a series exactly at the budget inline without acquiring a canvas', async () => {
+      const tenantId = 'boundary-fit';
+      const acquire = vi.spyOn(canvas, 'acquire');
+      getTimeSeries.mockResolvedValueOnce({ rows: fit, startDate, endDate });
+      try {
+        const result = await runToolContract(fxGetTimeseries, input, { context: { tenantId } });
+        expect(result.structuredContent).toMatchObject({
+          spilled: false,
+          rate_count: fit.length,
+          truncated: true,
+          next_start_date: fit[500]!.date,
+        });
+        expect(acquire).not.toHaveBeenCalled();
+      } finally {
+        acquire.mockRestore();
+      }
+      expect(registry.countForTenant(tenantId)).toBe(0);
+    });
+
+    it('stages a series one character past the budget', async () => {
+      const tenantId = 'boundary-overflow';
+      getTimeSeries.mockResolvedValueOnce({ rows: overflow, startDate, endDate });
+      const result = await runToolContract(fxGetTimeseries, input, { context: { tenantId } });
+      const data = result.structuredContent as { canvas_id: string; table_name: string };
+      expect(data).toMatchObject({ spilled: true, truncated: true, rate_count: overflow.length });
+      const instance = await canvas.acquire(data.canvas_id, createMockContext({ tenantId }));
+      expect(
+        (await instance.query(`SELECT count(*)::INTEGER AS n FROM ${data.table_name}`)).rows,
+      ).toEqual([{ n: overflow.length }]);
+      expect(registry.countForTenant(tenantId)).toBe(1);
+    });
+  });
+
   it('preserves concurrent repeated pair tables and supports joining another pair', async () => {
     const ctx = createMockContext({ tenantId: 'concurrent', errors: fxGetTimeseries.errors });
     const instance = await canvas.acquire(undefined, ctx);
@@ -274,6 +525,7 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
       start_date: startDate,
       end_date: endDate,
       canvas_id: instance.canvasId,
+      stage: false,
     };
     const staged = await Promise.all([
       fxGetTimeseries.handler(input, ctx),
@@ -294,30 +546,71 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
     ).toEqual([{ n: 2 }]);
   });
 
-  it.each([0, 2])(
-    'rejects unknown explicit canvases even for %s inline-fit rows',
-    async (count) => {
+  /**
+   * The registry throws `canvas_not_found` with its own generic re-stage hint; the tool's
+   * declared recovery (which names `stage: true`) must be what reaches both surfaces.
+   */
+  it.each([
+    { count: 0, stage: undefined },
+    { count: 2, stage: undefined },
+    { count: 2, stage: true },
+  ])(
+    'rejects an unknown canvas_id with the declared recovery ($count rows, stage=$stage)',
+    async ({ count, stage }) => {
+      const tenantId = `unknown-${count}-${stage}`;
       getTimeSeries.mockResolvedValueOnce({ rows: rows.slice(0, count), startDate, endDate });
-      const result = await runToolContract(fxGetTimeseries, {
-        base_currency: 'USD',
-        quote_currency: 'EUR',
-        start_date: startDate,
-        end_date: endDate,
-        canvas_id: 'abc1234567',
-      });
+      const result = await runToolContract(
+        fxGetTimeseries,
+        {
+          base_currency: 'USD',
+          quote_currency: 'EUR',
+          start_date: startDate,
+          end_date: endDate,
+          canvas_id: 'abc1234567',
+          ...(stage !== undefined && { stage }),
+        },
+        { context: { tenantId } },
+      );
       expect(result.isError).toBe(true);
-      for (const surface of [
-        JSON.stringify(result.structuredContent),
-        JSON.stringify(result.content),
-      ])
-        expect(surface).toContain('canvas_not_found');
+      const hint =
+        'Supply a live canvas ID from a recent response, set stage: true without canvas_id to stage on a new canvas, or omit both for automatic staging or inline paging.';
+      const error = (
+        result.structuredContent as {
+          error: { code: number; message: string; data: Record<string, unknown> };
+        }
+      ).error;
+      expect(error.code).toBe(JsonRpcErrorCode.NotFound);
+      expect(error.message).toBe('Canvas "abc1234567" not found or has expired.');
+      expect(error.data).toMatchObject({ reason: 'canvas_not_found', recovery: { hint } });
+      expect(textOf(result)).toContain(hint);
+      expect(textOf(result)).not.toContain('Re-run the tool that produced this canvas_id');
+      expect(registry.countForTenant(tenantId)).toBe(0);
     },
   );
 
-  it.each([false, true])(
-    'releases only newly acquired canvases after staging failure (supplied=%s)',
-    async (supplied) => {
-      const tenantId = `failed-${supplied}`;
+  /**
+   * How a failing or cancelled call reached the canvas: an automatic spill on a new canvas,
+   * explicit staging on a supplied one, or `stage: true` on a new one. Only the supplied
+   * canvas belongs to the caller and survives.
+   */
+  const stagingModes = ['automatic', 'supplied', 'stage'] as const;
+  const stagingInput = (
+    mode: (typeof stagingModes)[number],
+    existing: { canvasId: string } | undefined,
+  ) => ({
+    base_currency: 'USD',
+    quote_currency: 'EUR',
+    start_date: startDate,
+    end_date: endDate,
+    stage: mode === 'stage',
+    ...(existing && { canvas_id: existing.canvasId }),
+  });
+
+  it.each(stagingModes)(
+    'releases only newly acquired canvases after staging failure (%s)',
+    async (mode) => {
+      const supplied = mode === 'supplied';
+      const tenantId = `failed-${mode}`;
       const ctx = createMockContext({ tenantId, errors: fxGetTimeseries.errors });
       const existing = supplied ? await canvas.acquire(undefined, ctx) : undefined;
       if (existing) await existing.registerTable('keep', [{ sentinel: 'preserved' }]);
@@ -325,18 +618,9 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
       const failure = new Error('staging failed');
       const register = vi.spyOn(provider, 'registerTable').mockRejectedValueOnce(failure);
       try {
-        await expect(
-          fxGetTimeseries.handler(
-            {
-              base_currency: 'USD',
-              quote_currency: 'EUR',
-              start_date: startDate,
-              end_date: endDate,
-              ...(existing && { canvas_id: existing.canvasId }),
-            },
-            ctx,
-          ),
-        ).rejects.toBe(failure);
+        await expect(fxGetTimeseries.handler(stagingInput(mode, existing), ctx)).rejects.toBe(
+          failure,
+        );
       } finally {
         register.mockRestore();
       }
@@ -348,10 +632,11 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
     },
   );
 
-  it.each([false, true])(
-    'releases only new canvases when cancelled immediately after acquire (supplied=%s)',
-    async (supplied) => {
-      const tenantId = `cancelled-${supplied}`;
+  it.each(stagingModes)(
+    'releases only new canvases when cancelled immediately after acquire (%s)',
+    async (mode) => {
+      const supplied = mode === 'supplied';
+      const tenantId = `cancelled-${mode}`;
       const caller = new AbortController();
       const ctx = createMockContext({
         tenantId,
@@ -369,18 +654,9 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
         return instance;
       });
       try {
-        await expect(
-          fxGetTimeseries.handler(
-            {
-              base_currency: 'USD',
-              quote_currency: 'EUR',
-              start_date: startDate,
-              end_date: endDate,
-              ...(existing && { canvas_id: existing.canvasId }),
-            },
-            ctx,
-          ),
-        ).rejects.toBe(reason);
+        await expect(fxGetTimeseries.handler(stagingInput(mode, existing), ctx)).rejects.toBe(
+          reason,
+        );
       } finally {
         hook.mockRestore();
       }
@@ -392,10 +668,11 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
     },
   );
 
-  it.each([false, true])(
-    'cleans up cancellation while DuckDB consumes the staged rows (supplied=%s)',
-    async (supplied) => {
-      const tenantId = `midstage-${supplied}`;
+  it.each(stagingModes)(
+    'cleans up cancellation while DuckDB consumes the staged rows (%s)',
+    async (mode) => {
+      const supplied = mode === 'supplied';
+      const tenantId = `midstage-${mode}`;
       const caller = new AbortController();
       const ctx = createMockContext({
         tenantId,
@@ -421,18 +698,9 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
           return registerTable(id, name, interrupted(), context, options);
         });
       try {
-        await expect(
-          fxGetTimeseries.handler(
-            {
-              base_currency: 'USD',
-              quote_currency: 'EUR',
-              start_date: startDate,
-              end_date: endDate,
-              ...(existing && { canvas_id: existing.canvasId }),
-            },
-            ctx,
-          ),
-        ).rejects.toBe(reason);
+        await expect(fxGetTimeseries.handler(stagingInput(mode, existing), ctx)).rejects.toBe(
+          reason,
+        );
       } finally {
         hook.mockRestore();
       }
@@ -442,6 +710,54 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
         expect((await existing.query('SELECT * FROM keep')).rows).toEqual([
           { sentinel: 'preserved' },
         ]);
+    },
+  );
+
+  /**
+   * The caller leaves in the gap after the full table registers and before the tool returns:
+   * the call still rejects with the caller's reason and keeps nothing it staged — no new
+   * canvas, and no series table on the caller's own canvas.
+   */
+  it.each(stagingModes)(
+    'rejects and removes what it staged when cancelled after the table registers (%s)',
+    async (mode) => {
+      const supplied = mode === 'supplied';
+      const tenantId = `registered-${mode}`;
+      const caller = new AbortController();
+      const ctx = createMockContext({
+        tenantId,
+        signal: caller.signal,
+        errors: fxGetTimeseries.errors,
+      });
+      const existing = supplied
+        ? await canvas.acquire(undefined, createMockContext({ tenantId }))
+        : undefined;
+      if (existing) await existing.registerTable('keep', [{ sentinel: 'preserved' }]);
+      getTimeSeries.mockResolvedValue({ rows, startDate, endDate });
+      const reason = new Error('caller left after staging');
+      const registerTable = provider.registerTable.bind(provider);
+      let registered = 0;
+      const hook = vi.spyOn(provider, 'registerTable').mockImplementationOnce(async (...args) => {
+        const handle = await registerTable(...args);
+        registered++;
+        caller.abort(reason);
+        return handle;
+      });
+      try {
+        await expect(fxGetTimeseries.handler(stagingInput(mode, existing), ctx)).rejects.toBe(
+          reason,
+        );
+      } finally {
+        hook.mockRestore();
+      }
+      expect(registered).toBe(1);
+      expect(registry.countForTenant(tenantId)).toBe(supplied ? 1 : 0);
+      if (existing) {
+        expect((await existing.describe()).map((table) => table.name)).toEqual(['keep']);
+        expect((await existing.query('SELECT * FROM keep')).rows).toEqual([
+          { sentinel: 'preserved' },
+        ]);
+      }
     },
   );
 });

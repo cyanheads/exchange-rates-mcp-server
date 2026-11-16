@@ -8,7 +8,7 @@ import { getFrankfurterService } from '@/services/frankfurter/frankfurter-servic
 
 export const fxListCurrencies = tool('fx_list_currencies', {
   description:
-    'List current Frankfurter v1 currency codes and names with as_of, the latest served rate date. include_retired=true adds historical codes absent from the current set. Optional official ECB start_date/end_date are outer coverage bounds, not uninterrupted availability; a dated end_date does not imply retirement. Metadata outages are disclosed without failing current discovery. Historical availability remains validated from requested v1 data. Use this to disambiguate dollars (USD vs AUD vs CAD).',
+    'List current Frankfurter v1 currency codes and names with as_of, the latest served rate date. include_retired=true adds historical codes absent from the current set, each marked retired=true. Optional official ECB start_date/end_date are outer coverage bounds, not uninterrupted availability; read retired, not end_date, for retirement. Metadata outages are disclosed without failing current discovery. Historical availability remains validated from requested v1 data. Use this to disambiguate dollars (USD vs AUD vs CAD).',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -19,7 +19,7 @@ export const fxListCurrencies = tool('fx_list_currencies', {
       .boolean()
       .optional()
       .describe(
-        'Include historical codes absent from current v1 discovery, default false. Optional official ECB coverage dates are outer bounds and may contain gaps.',
+        'Include historical codes absent from current v1 discovery, marked retired=true; default false. Optional official ECB coverage dates are outer bounds and may contain gaps.',
       ),
   }),
   output: z.object({
@@ -39,7 +39,12 @@ export const fxListCurrencies = tool('fx_list_currencies', {
               .string()
               .optional()
               .describe(
-                'Last covered date in optional official ECB metadata; a date here does not imply retirement.',
+                'Last covered date in optional official ECB metadata; retired marks retirement, not this date.',
+              ),
+            retired: z
+              .boolean()
+              .describe(
+                'True only for a historical code include_retired added because it is absent from current v1 discovery; false for every current code.',
               ),
           })
           .describe('A single supported currency.'),
@@ -81,7 +86,7 @@ export const fxListCurrencies = tool('fx_list_currencies', {
       `**${result.count} currencies** (${result.source}; as_of: ${result.as_of}; optional coverage dates are outer bounds, not uninterrupted availability)\n`,
       ...result.currencies.map(
         (c) =>
-          `**${c.code}** — ${c.name}${c.start_date ? ` · start_date: ${c.start_date}` : ''}${c.end_date ? ` · end_date: ${c.end_date}` : ''}`,
+          `**${c.code}** — ${c.name}${c.start_date ? ` · start_date: ${c.start_date}` : ''}${c.end_date ? ` · end_date: ${c.end_date}` : ''}${c.retired ? ' · retired' : ''}`,
       ),
     ];
     return [{ type: 'text', text: lines.join('\n') }];

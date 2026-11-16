@@ -16,7 +16,7 @@ import { fxConvertCurrency } from '@/mcp-server/tools/definitions/fx-convert-cur
 import { fxGetRate } from '@/mcp-server/tools/definitions/fx-get-rate.tool.js';
 import { fxGetRates } from '@/mcp-server/tools/definitions/fx-get-rates.tool.js';
 import { fxGetTimeseries } from '@/mcp-server/tools/definitions/fx-get-timeseries.tool.js';
-import { unsupportedCurrency } from '@/services/frankfurter/errors.js';
+import { unsupportedCurrency, upstreamNoData } from '@/services/frankfurter/errors.js';
 import * as serviceModule from '@/services/frankfurter/frankfurter-service.js';
 import type { FrankfurterRateResponse, ResolvedRate } from '@/services/frankfurter/types.js';
 
@@ -328,6 +328,139 @@ describe('fx_get_timeseries paginated inline wire result', () => {
     expect(text).toContain(`start_date=${rows[500]!.date}`);
     expect(text).not.toContain('fx_dataframe');
   });
+});
+
+/**
+ * A snap has three causes — weekend, holiday, or a same-day request before the fix is
+ * published — so no wording on the point tools may assert one of them.
+ */
+describe('date snap wording', () => {
+  const note =
+    "⚠️ *Requested date snapped to 2024-05-31: no rate was published for the requested date (weekend, holiday, or the day's fix not yet released)*";
+  it.each([
+    { tool: fxGetRate, input: { base_currency: 'USD', quote_currency: 'EUR', date: '2024-06-01' } },
+    { tool: fxGetRates, input: { base_currency: 'USD', date: '2024-06-01' } },
+    {
+      tool: fxConvertCurrency,
+      input: { base_currency: 'USD', quote_currency: 'EUR', amount: 100, date: '2024-06-01' },
+    },
+  ])('$tool.name names every snap cause without asserting one', async ({ tool, input }) => {
+    expect(tool.output.shape.date_snapped.description).toBe(
+      'True when rate_date differs from the requested date: the requested date was a weekend or holiday, or its daily fix was not yet published. Frankfurter v1 snaps such requests to the prior published date. Always false when date is omitted.',
+    );
+    const surface = JSON.stringify([
+      tool.description,
+      z.toJSONSchema(tool.input),
+      z.toJSONSchema(tool.output),
+    ]);
+    expect(surface).not.toContain('weekend/holiday');
+    expect(surface).not.toContain('weekends/holidays');
+
+    const result = await runToolContract(tool as typeof fxGetRate, input as never);
+    expect(result.structuredContent).toMatchObject({ rate_date: '2024-05-31', date_snapped: true });
+    expect((result.content[0] as { text: string }).text.split('\n')).toContain(note);
+  });
+});
+
+/**
+ * Coverage bounds ride the handler re-raise: `ctx.fail` carries only the data it is
+ * given, so each tool must forward `currency_windows` with the service's message.
+ */
+describe('upstream_no_data wire envelope', () => {
+  const ILS = {
+    code: 'ILS',
+    name: 'Israeli New Shekel',
+    start_date: '2000-01-13',
+    end_date: '2026-11-13',
+  };
+  const coverage = (start: string, end = start) => ({ requested: { start, end }, windows: [ILS] });
+  const pointRecovery =
+    "Request a date inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range with fx_get_timeseries to find observed dates.";
+  const cases = [
+    {
+      tool: fxGetRate,
+      mock: mockGetRate,
+      input: { base_currency: 'ILS', quote_currency: 'USD', date: '1999-03-01' },
+      field: 'base_currency',
+      requested: coverage('1999-03-01'),
+      recovery: pointRecovery,
+    },
+    {
+      tool: fxConvertCurrency,
+      mock: mockGetRate,
+      input: { base_currency: 'ILS', quote_currency: 'USD', amount: 100, date: '1999-03-01' },
+      field: 'base_currency',
+      requested: coverage('1999-03-01'),
+      recovery: pointRecovery,
+    },
+    {
+      tool: fxGetRates,
+      mock: mockGetRates,
+      input: { base_currency: 'USD', date: '1999-03-01', symbols: ['ILS'] },
+      field: 'symbols',
+      requested: coverage('1999-03-01'),
+      recovery: pointRecovery,
+    },
+    {
+      tool: fxGetTimeseries,
+      mock: mockGetTimeSeries,
+      input: {
+        base_currency: 'USD',
+        quote_currency: 'ILS',
+        start_date: '1999-01-04',
+        end_date: '1999-12-31',
+      },
+      field: 'quote_currency',
+      requested: coverage('1999-01-04', '1999-12-31'),
+      recovery:
+        "Request a range inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range to find observed dates.",
+    },
+  ];
+
+  it.each(cases)(
+    '$tool.name forwards currency_windows and the bounds sentence blaming $field',
+    async ({ tool, mock, input, field, requested, recovery }) => {
+      (mock as typeof mockGetTimeSeries).mockRejectedValueOnce(
+        upstreamNoData(field, ['ILS'], requested),
+      );
+      const result = await runToolContract(tool as typeof fxGetRate, input as never);
+      const error = (
+        result.structuredContent as {
+          error: { code: number; data: Record<string, unknown>; message: string };
+        }
+      ).error;
+      const text = result.content.map((block) => (block as { text: string }).text).join('\n');
+      const message = `Frankfurter v1 returned no observation for ${field}: ILS. ILS (Israeli New Shekel) coverage begins 2000-01-13.`;
+
+      expect(result.isError).toBe(true);
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+        message,
+        data: {
+          reason: 'upstream_no_data',
+          field,
+          missing_codes: ['ILS'],
+          currency_windows: [ILS],
+          recovery: { hint: recovery },
+        },
+      });
+      expect(text).toContain(message);
+      expect(text).toContain(recovery);
+    },
+  );
+
+  it.each(cases)(
+    '$tool.name adds no currency_windows when the service supplied none',
+    async ({ tool, mock, input, field }) => {
+      (mock as typeof mockGetTimeSeries).mockRejectedValueOnce(upstreamNoData(field, ['ILS']));
+      const result = await runToolContract(tool as typeof fxGetRate, input as never);
+      const error = (
+        result.structuredContent as { error: { data: Record<string, unknown>; message: string } }
+      ).error;
+      expect(error.message).toBe(`Frankfurter v1 returned no observation for ${field}: ILS.`);
+      expect(error.data).not.toHaveProperty('currency_windows');
+    },
+  );
 });
 
 /**

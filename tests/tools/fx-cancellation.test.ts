@@ -50,7 +50,7 @@ const cases = [
     name: 'fx_get_timeseries',
     call: (signal: AbortSignal) =>
       fxGetTimeseries.handler(
-        { ...pair, start_date: '2024-06-03', end_date: '2024-06-04' },
+        { ...pair, start_date: '2024-06-03', end_date: '2024-06-04', stage: false },
         createMockContext({ signal, errors: fxGetTimeseries.errors }),
       ),
   },

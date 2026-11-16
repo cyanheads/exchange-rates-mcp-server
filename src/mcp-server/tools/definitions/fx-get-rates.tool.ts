@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { DATE_SNAPPED_DESCRIPTION, dateSnapNote } from '@/mcp-server/tools/date-snap.js';
 import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
@@ -16,12 +17,7 @@ import type { FrankfurterRateResponse } from '@/services/frankfurter/types.js';
 export const fxGetRates = tool('fx_get_rates', {
   inputAliases: { base: 'base_currency' },
   description:
-    'Get all available exchange rates for one base currency in a single snapshot. ' +
-    'Useful for bulk comparison and seeding downstream tools. ' +
-    'Returns a map of quote currency → rate, the actual snapshot date, and whether a ' +
-    'historical date was snapped from a weekend/holiday to the prior business day. ' +
-    'Optionally filter to a subset of quote currencies via symbols. ' +
-    'Listing the base currency itself in symbols is accepted and returns a rate of 1 for it.',
+    'Get all available exchange rates for one base currency in a single snapshot. Useful for bulk comparison and seeding downstream tools. Returns a map of quote currency → rate, the actual snapshot date, and whether a historical date was snapped to the prior published date. Optionally filter to a subset of quote currencies via symbols. Listing the base currency itself in symbols is accepted and returns a rate of 1 for it.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -57,19 +53,12 @@ export const fxGetRates = tool('fx_get_rates', {
     rate_date: z
       .string()
       .describe(
-        'Actual date of the rates. May differ from requested date on weekends/holidays — ' +
-          'daily observations may skip non-publication days; the API silently snaps to the prior business day.',
+        'Actual date of the rates: the prior published date when none was published for the requested date.',
       ),
     rates: z
       .record(z.string(), z.number())
       .describe('Map of quote currency code → exchange rate (units of quote per 1 base).'),
-    date_snapped: z
-      .boolean()
-      .describe(
-        'True when the API returned a different date than requested — ' +
-          'Frankfurter v1 snaps weekend/holiday requests to the prior business day. ' +
-          'Always false when date is omitted.',
-      ),
+    date_snapped: z.boolean().describe(DATE_SNAPPED_DESCRIPTION),
     rate_type: z
       .string()
       .describe(
@@ -100,8 +89,9 @@ export const fxGetRates = tool('fx_get_rates', {
     {
       reason: 'upstream_no_data',
       code: JsonRpcErrorCode.NotFound,
-      when: 'Every requested currency is supported but the Frankfurter v1 published no rates for this date.',
-      recovery: 'Try a more recent date — Frankfurter v1 history starts later for some currencies.',
+      when: 'Every requested currency is supported but Frankfurter v1 has no observation for a requested currency on this date.',
+      recovery:
+        "Request a date inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range with fx_get_timeseries to find observed dates.",
     },
   ],
 
@@ -148,8 +138,8 @@ export const fxGetRates = tool('fx_get_rates', {
           'upstream_no_data',
           failure.missing_codes
             ? (err as Error).message
-            : `Frankfurter v1 returned no ${input.base_currency} rates for ${
-                date === 'latest' ? 'the latest business day' : date
+            : `Frankfurter v1 returned no ${input.base_currency.trim().toUpperCase()} rates for ${
+                date === 'latest' ? 'the latest published date' : date
               }.`,
           { ...failure },
         );
@@ -177,9 +167,7 @@ export const fxGetRates = tool('fx_get_rates', {
     const rateLines = Object.entries(result.rates)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([code, rate]) => `**${code}**: ${rate}`);
-    const snapNote = result.date_snapped
-      ? `\n⚠️ *Requested date snapped to ${result.rate_date} (weekend/holiday — daily observations may skip non-publication days)*`
-      : '';
+    const snapNote = result.date_snapped ? `\n${dateSnapNote(result.rate_date)}` : '';
     return [
       {
         type: 'text',

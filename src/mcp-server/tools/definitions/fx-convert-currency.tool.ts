@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { DATE_SNAPPED_DESCRIPTION, dateSnapNote } from '@/mcp-server/tools/date-snap.js';
 import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
@@ -16,10 +17,7 @@ import type { ResolvedRate } from '@/services/frankfurter/types.js';
 export const fxConvertCurrency = tool('fx_convert_currency', {
   inputAliases: { base: 'base_currency', quote: 'quote_currency' },
   description:
-    'Convert an amount between any two currencies at the latest or a historical rate. ' +
-    'Returns the converted amount, the rate used, the actual rate date, and whether the ' +
-    'date was snapped from a weekend/holiday to the prior business day. ' +
-    'Cross-rates are triangulated through EUR automatically.',
+    'Convert an amount between any two currencies at the latest or a historical rate. Returns the converted amount, the rate used, the actual rate date, and whether the date was snapped to the prior published date. Cross-rates are triangulated through EUR automatically.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -63,12 +61,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
       .number()
       .describe('Exchange rate used: units of quote currency per 1 unit of base currency.'),
     rate_date: z.string().describe('Actual date of the rate used for conversion.'),
-    date_snapped: z
-      .boolean()
-      .describe(
-        'True when the API returned a different date than requested — ' +
-          'Frankfurter v1 snaps weekend/holiday requests to the prior business day.',
-      ),
+    date_snapped: z.boolean().describe(DATE_SNAPPED_DESCRIPTION),
     rate_type: z
       .string()
       .describe(
@@ -99,8 +92,9 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
     {
       reason: 'upstream_no_data',
       code: JsonRpcErrorCode.NotFound,
-      when: 'Both currencies are supported but the Frankfurter v1 published no rate for this date.',
-      recovery: 'Try a more recent date — Frankfurter v1 history starts later for some currencies.',
+      when: 'Both currencies are supported but Frankfurter v1 has no observation for a requested currency on this date.',
+      recovery:
+        "Request a date inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range with fx_get_timeseries to find observed dates.",
     },
   ],
 
@@ -146,8 +140,8 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
           'upstream_no_data',
           failure.missing_codes
             ? (err as Error).message
-            : `Frankfurter v1 returned no ${input.base_currency}/${input.quote_currency} rate for ${
-                date === 'latest' ? 'the latest business day' : date
+            : `Frankfurter v1 returned no ${input.base_currency.trim().toUpperCase()}/${input.quote_currency.trim().toUpperCase()} rate for ${
+                date === 'latest' ? 'the latest published date' : date
               }.`,
           { ...failure },
         );
@@ -181,9 +175,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
   },
 
   format: (result) => {
-    const snapNote = result.date_snapped
-      ? `\n⚠️ *Requested date snapped to ${result.rate_date} (weekend/holiday)*`
-      : '';
+    const snapNote = result.date_snapped ? `\n${dateSnapNote(result.rate_date)}` : '';
     return [
       {
         type: 'text',

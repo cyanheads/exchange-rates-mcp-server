@@ -4,8 +4,13 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { CanvasIdSchema, type ColumnSchema, spillover } from '@cyanheads/mcp-ts-core/canvas';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import {
+  CanvasIdSchema,
+  type CanvasInstance,
+  type ColumnSchema,
+  spillover,
+} from '@cyanheads/mcp-ts-core/canvas';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
 import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
@@ -14,7 +19,7 @@ import {
   getFrankfurterService,
   isIsoDate,
 } from '@/services/frankfurter/frankfurter-service.js';
-import type { TimeSeriesResult } from '@/services/frankfurter/types.js';
+import type { SeriesRow, TimeSeriesResult } from '@/services/frankfurter/types.js';
 
 /**
  * Most publication days one inline response carries — roughly two Frankfurter v1 years, ~21 KB
@@ -22,6 +27,24 @@ import type { TimeSeriesResult } from '@/services/frankfurter/types.js';
  * is the next start_date rather than an offset.
  */
 const INLINE_PAGE_SIZE = 500;
+
+/** spillover()'s inline preview budget, in serialized characters (~10k tokens). */
+const PREVIEW_CHARS = 40_000;
+
+/**
+ * Whether `rows` overflow the preview budget by spillover()'s own measure: the running
+ * sum of each row's `JSON.stringify` length passing {@link PREVIEW_CHARS}. Deciding first
+ * means an inline-fit series never acquires a canvas, so it still answers at the tenant
+ * canvas cap. Mirrors spillover() until it can acquire lazily (cyanheads/mcp-ts-core#501).
+ */
+const overflowsPreview = (rows: readonly SeriesRow[]) => {
+  let chars = 0;
+  for (const row of rows) {
+    chars += JSON.stringify(row).length;
+    if (chars > PREVIEW_CHARS) return true;
+  }
+  return false;
+};
 
 /**
  * Column types of a staged series, matching `SeriesRow`. Declared rather than sniffed
@@ -37,7 +60,7 @@ const SERIES_SCHEMA: ColumnSchema[] = [
 
 export const fxGetTimeseries = tool('fx_get_timeseries', {
   inputAliases: { base: 'base_currency', quote: 'quote_currency' },
-  description: `Get historical daily Frankfurter v1 rates over an inclusive date range. Same-date EUR legs are divided without intermediate rounding; only days with both currencies appear, including observed self-pairs at 1 and historical retired currencies. Missing-leg served days produce coverage notices; weekends and holidays are not counted as missing. summary covers all observed days before delivery: arithmetic mean, earliest tied extrema, endpoints and percentage change, without accounting policy. limit bounds returned rows (default/max ${INLINE_PAGE_SIZE}); 0 returns summary only. Continue inline with next_start_date, the same end_date and a positive limit. Long ranges (>90 days by default) stage beyond the 40,000-character preview budget, independently of limit. Explicit canvas_id always stages the complete series, including short/empty results, and fails if unavailable or unknown. Each registration preserves earlier tables with a unique table_name. spilled=true returns canvas_id and table_name; use fx_dataframe_describe then fx_dataframe_query for SQL. Without DataCanvas, omit canvas_id to page inline.`,
+  description: `Get historical daily Frankfurter v1 rates over an inclusive date range. Same-date EUR legs are divided without intermediate rounding; only days with both currencies appear, including observed self-pairs at 1 and historical retired currencies. Missing-leg served days produce coverage notices; weekends and holidays are not counted as missing. summary covers all observed days before delivery: arithmetic mean, earliest tied extrema, endpoints and percentage change, without accounting policy. limit bounds returned rows (default/max ${INLINE_PAGE_SIZE}); 0 returns summary only. Continue inline with next_start_date, the same end_date and a positive limit. Long ranges (>90 days by default) stage beyond the 40,000-character preview budget, independently of limit. canvas_id, or stage: true on a new canvas, always stages the complete series, including short/empty results; either fails without DataCanvas, and an unknown canvas_id fails. Pass the returned canvas_id to stage another series beside it. Each registration preserves earlier tables with a unique table_name. spilled=true returns canvas_id and table_name; use fx_dataframe_describe then fx_dataframe_query for SQL. Without DataCanvas, omit canvas_id and stage to page inline.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -58,8 +81,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .string()
       .meta({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })
       .describe(
-        'ISO 8601 start date (YYYY-MM-DD). Frankfurter v1 data starts 1999-01-04. ' +
-          'The actual first data point may be later if start_date falls on a weekend/holiday.',
+        'ISO 8601 start date (YYYY-MM-DD). Frankfurter v1 data starts 1999-01-04. The actual first data point is later when no rate was published on start_date (a weekend, a holiday, or a currency gap).',
       ),
     end_date: z
       .string()
@@ -68,8 +90,14 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         'ISO 8601 end date (YYYY-MM-DD). Must be >= start_date. Future dates are not supported.',
       ),
     canvas_id: CanvasIdSchema.optional().describe(
-      'Existing canvas ID from a prior call explicitly requesting staging even for short or empty results. Every call creates a uniquely named table. Omit for automatic staging or inline paging.',
+      'Existing canvas ID from a prior call; stages the complete series on it even for short or empty results, whatever stage says. Every call creates a uniquely named table. Omit it and set stage: true to stage on a new canvas; omit both for automatic staging or inline paging.',
     ),
+    stage: z
+      .boolean()
+      .default(false)
+      .describe(
+        'true stages the complete series even when short or empty: on canvas_id when given, otherwise on a new canvas whose canvas_id is returned. To stage another series beside it, pass that canvas_id rather than stage: true again, since fx_dataframe_query reads one canvas at a time. false keeps automatic staging; canvas_id always stages.',
+      ),
     limit: z
       .number()
       .int()
@@ -168,7 +196,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     spilled: z
       .boolean()
       .describe(
-        'True when the complete result was staged on DataCanvas, either explicitly through canvas_id or automatically after exceeding the threshold and preview budget.',
+        'True when the complete result was staged on DataCanvas, either explicitly through canvas_id or stage: true, or automatically after exceeding the threshold and preview budget.',
       ),
     canvas_id: z
       .string()
@@ -226,24 +254,23 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     {
       reason: 'upstream_no_data',
       code: JsonRpcErrorCode.NotFound,
-      when: 'Both currencies are supported but the Frankfurter v1 published no rates across this range.',
+      when: 'Both currencies are supported but Frankfurter v1 has no observation for a requested currency across this range.',
       recovery:
-        'Try a more recent range — Frankfurter v1 history starts later for some currencies.',
+        "Request a range inside the currency's coverage bounds (currency_windows, or fx_list_currencies); bounds can contain gaps, so widen the range to find observed dates.",
     },
     {
       reason: 'canvas_not_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'An explicitly supplied canvas_id does not exist or has expired.',
       recovery:
-        'Supply an existing canvas ID, or omit canvas_id for automatic staging or inline paging.',
-      thrownBy: 'service',
+        'Supply a live canvas ID from a recent response, set stage: true without canvas_id to stage on a new canvas, or omit both for automatic staging or inline paging.',
     },
     {
       reason: 'canvas_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'canvas_id requests staging on a deployment with DataCanvas disabled.',
+      when: 'canvas_id or stage: true requests staging on a deployment with DataCanvas disabled.',
       recovery:
-        'Enable DataCanvas with CANVAS_PROVIDER_TYPE=duckdb, or omit canvas_id for inline results.',
+        'Enable DataCanvas with CANVAS_PROVIDER_TYPE=duckdb, or omit both canvas_id and stage for inline results.',
     },
   ],
 
@@ -289,6 +316,16 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     const dayCount =
       (new Date(input.end_date).getTime() - new Date(input.start_date).getTime()) / msPerDay + 1;
 
+    const canvas = getCanvas();
+    /** canvas_id stages whatever stage says; stage alone stages on a new canvas. */
+    const explicit = input.canvas_id !== undefined || input.stage;
+    /** A deployment setting, not a data outcome: refuse before spending an upstream request. */
+    if (explicit && canvas == null) {
+      throw ctx.fail('canvas_unavailable', 'Explicit staging requires DataCanvas on this server.');
+    }
+
+    const base = input.base_currency.trim().toUpperCase();
+    const quote = input.quote_currency.trim().toUpperCase();
     let series: TimeSeriesResult;
     try {
       series = await service.getTimeSeries(
@@ -312,7 +349,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
           'upstream_no_data',
           failure.missing_codes
             ? (err as Error).message
-            : `Frankfurter v1 returned no ${input.base_currency}/${input.quote_currency} rates between ${input.start_date} and ${input.end_date}.`,
+            : `Frankfurter v1 returned no ${base}/${quote} rates between ${input.start_date} and ${input.end_date}.`,
           { ...failure },
         );
       }
@@ -332,7 +369,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     }
     if (rows.length === 0)
       notices.push(
-        `Frankfurter v1 returned no ${input.base_currency.trim().toUpperCase()}/${input.quote_currency.trim().toUpperCase()} observation between ${input.start_date} and ${input.end_date}. Weekends, holidays and currency-specific gaps can leave a valid window empty. Widen the range to look for publication days.`,
+        `Frankfurter v1 returned no ${base}/${quote} observation between ${input.start_date} and ${input.end_date}. Weekends, holidays, a fix not yet published and currency-specific gaps can leave a valid window empty. Widen the range to look for publication days.`,
       );
     const notice = (message: string) => {
       notices.push(message);
@@ -340,19 +377,15 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     };
 
     ctx.log.info('Fetched timeseries', {
-      base: input.base_currency,
-      quote: input.quote_currency,
+      base,
+      quote,
       start: actualStart,
       end: actualEnd,
       points: rows.length,
       dayCount,
     });
 
-    const canvas = getCanvas();
     const exceedsThreshold = dayCount > config.timeseriesCanvasThresholdDays;
-    if (input.canvas_id !== undefined && canvas == null) {
-      throw ctx.fail('canvas_unavailable', 'Explicit staging requires DataCanvas on this server.');
-    }
     const first = rows[0];
     const summary = (() => {
       if (!first) return;
@@ -379,8 +412,8 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
 
     /** Fields every branch below returns identically — only rates/count/paging/spill differ. */
     const envelope = {
-      base_currency: input.base_currency.trim().toUpperCase(),
-      quote_currency: input.quote_currency.trim().toUpperCase(),
+      base_currency: base,
+      quote_currency: quote,
       start_date: actualStart,
       end_date: actualEnd,
       rate_type: 'Daily rate (Frankfurter v1)',
@@ -388,13 +421,30 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       ...(summary && { summary }),
     };
 
-    if (canvas != null && (exceedsThreshold || input.canvas_id !== undefined)) {
-      const instance = await canvas.acquire(input.canvas_id, ctx);
+    if (canvas != null && (explicit || (exceedsThreshold && overflowsPreview(rows)))) {
+      let instance: CanvasInstance;
+      try {
+        instance = await canvas.acquire(input.canvas_id, ctx);
+      } catch (err) {
+        /**
+         * The registry's own re-stage hint would win over the declared recovery, which
+         * names stage: true — re-raise through the contract so the declared one reaches the wire.
+         */
+        if (err instanceof McpError && err.data?.reason === 'canvas_not_found') {
+          throw ctx.fail(
+            'canvas_not_found',
+            `Canvas "${input.canvas_id}" not found or has expired.`,
+            undefined,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
       const tableName = `fx_${envelope.base_currency.toLowerCase()}_${envelope.quote_currency.toLowerCase()}_${crypto.randomUUID().replaceAll('-', '')}`;
       let retained = false;
       try {
         ctx.signal.throwIfAborted();
-        if (input.canvas_id !== undefined) {
+        if (explicit) {
           const handle = await instance.registerTable(tableName, rows, {
             schema: SERIES_SCHEMA,
             signal: ctx.signal,
@@ -421,7 +471,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
           source: rows,
           schema: SERIES_SCHEMA,
           tableName,
-          previewChars: 40_000, // ~10k tokens preview
+          previewChars: PREVIEW_CHARS,
           signal: ctx.signal,
         });
         ctx.signal.throwIfAborted();
@@ -453,9 +503,9 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
             table_name: stagedTable,
           };
         }
-        // Every row fit the preview budget, so nothing was staged — page it inline below.
+        // spillover() measured a fit after all (its measure drifted from overflowsPreview), so nothing was staged — page it inline below.
       } finally {
-        if (input.canvas_id !== undefined && !retained) await instance.drop(tableName);
+        if (explicit && !retained) await instance.drop(tableName);
         if (instance.isNew && !retained) await canvas.drop(instance.canvasId, ctx);
       }
     }

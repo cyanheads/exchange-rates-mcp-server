@@ -16,7 +16,7 @@ const ServerConfigSchema = z.object({
     .number()
     .default(90)
     .describe(
-      'Day count above which fx_get_timeseries considers automatic DataCanvas staging; without canvas_id, series that fit the preview remain inline.',
+      'Day count above which fx_get_timeseries considers automatic DataCanvas staging; without canvas_id or stage: true, series that fit the preview remain inline.',
     ),
   enableCanvasDrop: z
     .stringbool()
