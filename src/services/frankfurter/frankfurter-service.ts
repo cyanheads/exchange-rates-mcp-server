@@ -4,14 +4,21 @@
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { serializationError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { fetchCurrencyMetadata } from './currency-metadata.js';
-import { invalidDateFormat, unsupportedCurrency, upstreamNoData } from './errors.js';
+import {
+  type CoverageContext,
+  invalidDateFormat,
+  unsupportedCurrency,
+  upstreamNoData,
+} from './errors.js';
 import type {
+  CoverageWindow,
   Currency,
   CurrencyMap,
+  DiscoveredCurrency,
   FrankfurterRateResponse,
   FrankfurterSeriesResponse,
   ResolvedRate,
@@ -27,6 +34,13 @@ const DATE_FORMAT_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The Frankfurter v1 reference set changes at most a few times a decade — cache it for a day. */
 const CURRENCY_CACHE_TTL_MS = 86_400_000;
+
+/**
+ * A failed coverage-metadata read is retried after five minutes, not a day: one transient
+ * timeout would otherwise hide retired flags and coverage windows until the next daily
+ * refresh, while the wait still bounds requests to the optional endpoint during an outage.
+ */
+const METADATA_FAILURE_TTL_MS = 300_000;
 
 /**
  * True when `value` is a real calendar date written as YYYY-MM-DD.
@@ -65,7 +79,7 @@ class FrankfurterService {
    */
   private readonly userAgent: string;
   private currencyCache?: { codes: Set<string>; fetchedAt: number; list: Currency[] };
-  private metadataCache?: { fetchedAt: number; currencies: Currency[] | undefined };
+  private metadataCache?: { fetchedAt: number; currencies: CoverageWindow[] | undefined };
 
   constructor() {
     this.baseUrl = getServerConfig().frankfurterBaseUrl;
@@ -79,35 +93,38 @@ class FrankfurterService {
     return (await this.currencies(signal)).list.map((currency) => ({ ...currency }));
   }
 
-  /** Current discovery with the latest served rate date, cached independently of historical data. */
+  /**
+   * Current discovery dated `as_of`, the latest served rate date. Each call reads
+   * `/latest?base=EUR` uncached — the request a latest-rate call makes — so `as_of`
+   * matches the `rate_date` a latest-rate call returns at the same moment; a failed
+   * read fails discovery rather than reporting an earlier date. The currency list and
+   * coverage metadata keep their day-long caches.
+   */
   async currencyDiscovery(
     signal?: AbortSignal,
     includeRetired = false,
-  ): Promise<{ currencies: Currency[]; as_of: string; notice?: string }> {
+  ): Promise<{ currencies: DiscoveredCurrency[]; as_of: string; notice?: string }> {
     const current = await this.listCurrencies(signal);
     signal?.throwIfAborted();
-    const cached = this.discoveryDateCache;
-    let as_of: string;
-    if (cached && Date.now() - cached.fetchedAt <= CURRENCY_CACHE_TTL_MS) {
-      as_of = cached.date;
-    } else {
-      const raw = await this.fetchJson<FrankfurterRateResponse>('/latest?base=EUR', signal);
-      signal?.throwIfAborted();
-      this.discoveryDateCache = { date: raw.date, fetchedAt: Date.now() };
-      as_of = raw.date;
-    }
+    const { date: as_of } = await this.fetchJson<FrankfurterRateResponse>(
+      '/latest?base=EUR',
+      signal,
+    );
     const metadata = await this.currencyMetadata(signal);
     const bounds = new Map(metadata?.map((currency) => [currency.code, currency]));
-    const currencies = current.map((currency) => {
+    const currencies: DiscoveredCurrency[] = current.map((currency) => {
       const coverage = bounds.get(currency.code);
       return {
         ...currency,
         ...(coverage && { start_date: coverage.start_date, end_date: coverage.end_date }),
+        retired: false,
       };
     });
     if (includeRetired && metadata) {
       const currentCodes = new Set(current.map((currency) => currency.code));
-      currencies.push(...metadata.filter((currency) => !currentCodes.has(currency.code)));
+      for (const currency of metadata) {
+        if (!currentCodes.has(currency.code)) currencies.push({ ...currency, retired: true });
+      }
       currencies.sort((a, b) => a.code.localeCompare(b.code));
     }
     const unavailable = metadata === undefined;
@@ -122,11 +139,12 @@ class FrankfurterService {
   }
 
   /** Never query official metadata for a custom v1 source, nor share a caller's cancellation. */
-  private async currencyMetadata(signal?: AbortSignal): Promise<Currency[] | undefined> {
+  private async currencyMetadata(signal?: AbortSignal): Promise<CoverageWindow[] | undefined> {
     signal?.throwIfAborted();
     if (this.baseUrl !== 'https://api.frankfurter.dev/v1') return;
     const cached = this.metadataCache;
-    if (cached && Date.now() - cached.fetchedAt <= CURRENCY_CACHE_TTL_MS)
+    const ttlMs = cached?.currencies ? CURRENCY_CACHE_TTL_MS : METADATA_FAILURE_TTL_MS;
+    if (cached && Date.now() - cached.fetchedAt <= ttlMs)
       return cached.currencies?.map((currency) => ({ ...currency }));
     const currencies = await fetchCurrencyMetadata(this.userAgent, signal);
     signal?.throwIfAborted();
@@ -145,8 +163,6 @@ class FrankfurterService {
     const windows = metadata?.filter((currency) => rejected.includes(currency.code));
     return unsupportedCurrency(field, rejected, accepted, windows);
   }
-
-  private discoveryDateCache?: { date: string; fetchedAt: number };
 
   /** The supported currency set, fetched once per {@link CURRENCY_CACHE_TTL_MS}. */
   private async currencies(
@@ -189,10 +205,16 @@ class FrankfurterService {
     }
   }
 
-  /** Historical membership is the union of raw served dates, including snapped dates before clipping. */
+  /**
+   * Historical membership is the union of raw served dates, including snapped dates before
+   * clipping. A known code absent from that data fails `upstream_no_data`, placed against
+   * its official coverage bounds when metadata is available — read as `currencyRejection`
+   * reads it, so the miss adds no v1 request.
+   */
   private async assertHistoricalCurrencies(
     fields: Array<[string, string[]]>,
     available: Set<string>,
+    requested: CoverageContext['requested'],
     signal?: AbortSignal,
   ): Promise<void> {
     const accepted = [...available].sort();
@@ -206,7 +228,9 @@ class FrankfurterService {
       if (unknown.length > 0) throw await this.currencyRejection(field, unknown, accepted, signal);
     }
     for (const [field, missing] of absent) {
-      if (missing.length > 0) throw upstreamNoData(field, missing);
+      if (missing.length === 0) continue;
+      const metadata = await this.currencyMetadata(signal);
+      throw upstreamNoData(field, missing, metadata && { requested, windows: metadata });
     }
   }
 
@@ -239,6 +263,7 @@ class FrankfurterService {
           ['quote_currency', [upper_quote]],
         ],
         new Set(['EUR', ...Object.keys(raw.rates)]),
+        { start: date, end: date },
         signal,
       );
     }
@@ -293,6 +318,7 @@ class FrankfurterService {
           ['symbols', upper_symbols],
         ],
         new Set(['EUR', ...Object.keys(raw.rates)]),
+        { start: date, end: date },
         signal,
       );
     }
@@ -325,8 +351,9 @@ class FrankfurterService {
    *
    * Two upstream behaviours are absorbed here:
    *
-   * - A range that opens on a weekend or a TARGET holiday is snapped back to the
-   *   prior publication day, so the response can carry dates the caller never
+   * - A range that opens on a day with no published fix (a weekend, a TARGET
+   *   holiday, or a same-day start before the fix is released) is snapped back to
+   *   the prior publication day, so the response can carry dates the caller never
    *   asked for. Those rows are dropped, which leaves an empty series whenever
    *   the window contains no publication day at all.
    * - Each row requires both EUR legs on that same served date. An identity pair
@@ -356,6 +383,7 @@ class FrankfurterService {
         ['quote_currency', [upper_quote]],
       ],
       available,
+      { start: startDate, end: endDate },
       signal,
     );
 
@@ -446,7 +474,23 @@ class FrankfurterService {
           throw await httpErrorFromResponse(response, { service: 'Frankfurter' });
         }
 
-        const body = (await response.json()) as T;
+        let body: T;
+        try {
+          body = (await response.json()) as T;
+        } catch (err) {
+          signal?.throwIfAborted();
+          /** A fully read body that is not JSON (an HTML interstitial) will not parse on retry. */
+          if (err instanceof SyntaxError) {
+            throw serializationError(
+              'Frankfurter returned a response that is not JSON.',
+              undefined,
+              {
+                cause: err,
+              },
+            );
+          }
+          throw err;
+        }
         signal?.throwIfAborted();
         return body;
       },

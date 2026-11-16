@@ -8,9 +8,14 @@
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createFetchMock, type FetchMockHarness } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createFetchMock,
+  type FetchMockHarness,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
+import { fxGetRate } from '@/mcp-server/tools/definitions/fx-get-rate.tool.js';
 import {
   getFrankfurterService,
   isIsoDate,
@@ -237,15 +242,76 @@ describe('getRate', () => {
     first.currencies.length = 1;
     expect(await service.currencyDiscovery()).toEqual({
       currencies: [
-        { code: 'EUR', name: 'Euro' },
-        { code: 'GBP', name: 'British Pound' },
-        { code: 'USD', name: 'US Dollar' },
+        { code: 'EUR', name: 'Euro', retired: false },
+        { code: 'GBP', name: 'British Pound', retired: false },
+        { code: 'USD', name: 'US Dollar', retired: false },
       ],
       as_of: '2024-06-03',
       notice:
         'Optional official ECB coverage metadata is unavailable; current v1 discovery is preserved, but coverage dates and additional retired currencies cannot be supplied.',
     });
-    expect(requestedUrls()).toHaveLength(3);
+    /** The currency list and metadata stay cached for a day; `as_of` is read on every call. */
+    const urls = requestedUrls();
+    expect(urls.filter((url) => url.endsWith('/currencies'))).toHaveLength(1);
+    expect(urls.filter((url) => url.endsWith('/latest?base=EUR'))).toHaveLength(2);
+    expect(urls.filter((url) => url.includes('/v2/'))).toHaveLength(1);
+  });
+
+  it('dates discovery from the same /latest read a latest-rate call makes, with no as_of cache', async () => {
+    let served = '2026-11-13';
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: Response.json(CURRENCIES) },
+      {
+        match: /\/latest\?base=EUR$/,
+        respond: () => Response.json({ amount: 1, base: 'EUR', date: served, rates: { USD: 1.1 } }),
+      },
+      {
+        match: /\/v2\/currencies\?scope=all&providers=ECB$/,
+        respond: new Response(null, { status: 503 }),
+      },
+    ]);
+    http.install();
+    const service = getFrankfurterService();
+    for (const date of ['2026-11-13', '2026-11-16']) {
+      served = date;
+      const { as_of } = await service.currencyDiscovery();
+      expect(as_of).toBe(date);
+      expect(as_of).toBe((await service.getRate('EUR', 'USD', 'latest')).rateDate);
+    }
+    expect(requestedUrls().filter((url) => url.endsWith('/latest?base=EUR'))).toHaveLength(4);
+  });
+
+  it('fails discovery when /latest fails, never falling back to an earlier as_of', async () => {
+    let available = true;
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: Response.json(CURRENCIES) },
+      {
+        match: /\/latest\?base=EUR$/,
+        respond: () =>
+          available
+            ? Response.json({ amount: 1, base: 'EUR', date: '2026-11-13', rates: { USD: 1.1 } })
+            : new Response(null, { status: 404 }),
+      },
+      {
+        match: /\/v2\/currencies\?scope=all&providers=ECB$/,
+        respond: new Response(null, { status: 503 }),
+      },
+    ]);
+    http.install();
+    const service = getFrankfurterService();
+    expect((await service.currencyDiscovery()).as_of).toBe('2026-11-13');
+    available = false;
+    const rateFailure = await service.getRate('EUR', 'USD', 'latest').catch((error) => error);
+    const discoveryFailure = await service.currencyDiscovery().catch((error) => error);
+    expect(rateFailure).toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: { reason: 'upstream_no_data' },
+    });
+    expect(discoveryFailure).toMatchObject({
+      code: rateFailure.code,
+      message: rateFailure.message,
+      data: rateFailure.data,
+    });
   });
 
   it('dates an identity rate to the ECB publication day, flagging the snap like any other pair', async () => {
@@ -507,8 +573,59 @@ describe('upstream failure error data', () => {
     expect(error.data).not.toHaveProperty('url');
     expect(JSON.stringify(error.data)).not.toContain(BASE_URL);
     expect(error.message).toContain('Frankfurter');
-    /** The status and body still reach the caller — it is the URL alone that is withheld. */
+    /** The thrown error keeps the status and the captured body for server-side logs; the request URL is never captured. */
     expect(error.data).toMatchObject({ status: 400, body: 'upstream said no' });
+  });
+
+  it('keeps a captured upstream error page off the client envelope', async () => {
+    const page = '<html><body><h1>400 Bad Request</h1><script>alert(1)</script></body></html>';
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: Response.json(CURRENCIES) },
+      {
+        match: () => true,
+        respond: () =>
+          new Response(page, { status: 400, headers: { 'content-type': 'text/html' } }),
+      },
+    ]);
+    http.install();
+
+    const result = await runToolContract(fxGetRate, {
+      base_currency: 'USD',
+      quote_currency: 'EUR',
+    });
+
+    expect(result.isError).toBe(true);
+    const data = (result.structuredContent as { error: { data: Record<string, unknown> } }).error
+      .data;
+    expect(data).toMatchObject({ status: 400 });
+    expect(data).not.toHaveProperty('body');
+    expect(data).not.toHaveProperty('responseBody');
+    expect(JSON.stringify(result)).not.toContain('<html>');
+  });
+
+  it('fails a 200 page that is not JSON as an upstream fault, without retrying it', async () => {
+    let rateCalls = 0;
+    http = createFetchMock([
+      { match: /\/currencies$/, respond: Response.json(CURRENCIES) },
+      {
+        match: () => true,
+        respond: () => {
+          rateCalls++;
+          return new Response('<html><body>Just a moment</body></html>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          });
+        },
+      },
+    ]);
+    http.install();
+
+    const error = await rejectionOf(getFrankfurterService().getRate('USD', 'EUR', 'latest'));
+
+    expect(error.code).toBe(JsonRpcErrorCode.SerializationError);
+    expect(error.message).toBe('Frankfurter returned a response that is not JSON.');
+    expect(rateCalls).toBe(1);
+    expect(causeChain(error).some((link) => link instanceof SyntaxError)).toBe(true);
   });
 
   it('keeps the request URL off the 404 upstream_no_data shortcut', async () => {

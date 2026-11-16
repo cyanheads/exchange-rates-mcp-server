@@ -17,6 +17,15 @@ export interface Currency {
   start_date?: string;
 }
 
+/** An official ECB metadata row: both outer bounds present, never a guarantee against interior gaps. */
+export type CoverageWindow = Required<Currency>;
+
+/** A currency discovery row. `Currency` stays the shape of `currency_windows` on errors. */
+export interface DiscoveredCurrency extends Currency {
+  /** True only for a code absent from current v1 discovery; v1 membership decides it, not `end_date`. */
+  retired: boolean;
+}
+
 /** Raw API response from GET /latest or GET /{date}. */
 export interface FrankfurterRateResponse {
   amount: number;
@@ -38,13 +47,16 @@ export interface FrankfurterSeriesResponse {
 export interface ResolvedRate {
   /** The base currency code. */
   baseCurrency: string;
-  /** True when the API snapped the requested date to a prior business day. */
+  /**
+   * True when `rateDate` differs from the requested date: a weekend, a holiday, or a
+   * same-day request before that day's fix is published. Always false for `latest`.
+   */
   dateSnapped: boolean;
   /** The quote currency code. */
   quoteCurrency: string;
   /** The exchange rate (how many quote units per 1 base). */
   rate: number;
-  /** The actual date of the rate (may differ from requested on weekends/holidays). */
+  /** The served publication date: the prior published date when none was published for the requested one. */
   rateDate: string;
   /** Human-readable rate type caveat. */
   rateType: 'Daily rate (Frankfurter v1)';

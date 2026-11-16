@@ -7,7 +7,7 @@
  */
 
 import { McpError, notFound, validationError } from '@cyanheads/mcp-ts-core/errors';
-import type { Currency } from './types.js';
+import type { CoverageWindow, Currency } from './types.js';
 
 /**
  * Contract reasons the Frankfurter service attaches to the errors it throws.
@@ -23,6 +23,8 @@ export type FrankfurterFailureReason = (typeof FAILURE_REASONS)[number];
 
 /** Structured failure payload carried on `McpError.data`. */
 export interface FrankfurterFailure {
+  /** Official outer coverage bounds for the codes at fault, when metadata was available. */
+  currency_windows?: Currency[];
   /** The input at fault, named as the calling tool exposes it (e.g. `start_date`, `symbols`). */
   field?: string;
   /** Known requested codes without an observation in the served data. */
@@ -76,42 +78,77 @@ export function unsupportedCurrency(
   });
 }
 
+/** What a dated request asked for and the official bounds to compare it with. */
+export interface CoverageContext {
+  /** The requested date (`start` equals `end`) or inclusive range. */
+  requested: { end: string; start: string };
+  /** Official outer bounds; a missing code without a row gets no sentence or window. */
+  windows: CoverageWindow[];
+}
+
+/** One sentence placing the requested dates against a code's official outer bounds. */
+function coverageSentence({ start, end }: CoverageContext['requested'], window: CoverageWindow) {
+  const currency = `${window.code} (${window.name})`;
+  if (end < window.start_date) return `${currency} coverage begins ${window.start_date}.`;
+  if (start > window.end_date) return `${currency} coverage ends ${window.end_date}.`;
+  return start === end
+    ? `${currency} has no published rate on ${start}, inside its ${window.start_date} through ${window.end_date} coverage bounds; bounds can contain gaps.`
+    : `${currency} has no published rate from ${start} through ${end}, which overlaps its ${window.start_date} through ${window.end_date} coverage bounds; bounds can contain gaps.`;
+}
+
 /**
  * Frankfurter v1 returned no rates for an otherwise well-formed request — most often a
  * date that predates the requested currency's series (ILS and BRL start well after
- * the 1999-01-04 Frankfurter v1 epoch).
+ * the 1999-01-04 Frankfurter v1 epoch), or one inside a gap (ISK, 2008-12-04 through
+ * 2018-01-31). With `coverage`, each missing code that has official bounds gets one
+ * sentence in code order and a `currency_windows` row, the `unsupported_currency` shape.
  *
  * The upstream request URL is deliberately absent: `McpError.data` reaches the
  * client as `structuredContent.error.data`, and the URL carries both the caller's
  * inputs and the configured Frankfurter host. The calling tool re-raises with a
  * message naming the pair and dates it asked for, which is the part a caller can act on.
  */
-export function upstreamNoData(field?: string, missing?: string[]): McpError {
+export function upstreamNoData(
+  field?: string,
+  missing?: string[],
+  coverage?: CoverageContext,
+): McpError {
   const missing_codes = missing && [...new Set(missing)].sort();
+  const windows = (missing_codes ?? []).flatMap(
+    (code) => coverage?.windows.find((window) => window.code === code) ?? [],
+  );
+  const bounds = coverage
+    ? windows.map((window) => ` ${coverageSentence(coverage.requested, window)}`).join('')
+    : '';
   return notFound(
     missing_codes
-      ? `Frankfurter v1 returned no observation for ${field}: ${missing_codes.join(', ')}.`
+      ? `Frankfurter v1 returned no observation for ${field}: ${missing_codes.join(', ')}.${bounds}`
       : 'Frankfurter v1 returned no rates for this request.',
     {
       ...(field && { field }),
       ...(missing_codes && { missing_codes }),
       reason: 'upstream_no_data',
+      ...(windows.length > 0 && { currency_windows: windows }),
     },
   );
 }
 
 /**
- * Read the structured failure off a service-thrown error.
+ * Read the structured failure off a service-thrown error, for a handler re-raise to
+ * forward whole — `ctx.fail` carries only the data it is given.
  * Returns `undefined` for anything the service did not classify.
  */
 export function failureOf(error: unknown): FrankfurterFailure | undefined {
   if (!(error instanceof McpError)) return;
   const data = error.data as
-    | { field?: unknown; reason?: unknown; missing_codes?: unknown }
+    | { currency_windows?: unknown; field?: unknown; reason?: unknown; missing_codes?: unknown }
     | undefined;
   const reason = FAILURE_REASONS.find((known) => known === data?.reason);
   if (reason === undefined) return;
   return {
+    ...(Array.isArray(data?.currency_windows)
+      ? { currency_windows: data.currency_windows as Currency[] }
+      : {}),
     ...(typeof data?.field === 'string' ? { field: data.field } : {}),
     ...(Array.isArray(data?.missing_codes) &&
     data.missing_codes.every((code) => typeof code === 'string')

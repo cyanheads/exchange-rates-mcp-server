@@ -3,7 +3,7 @@
  * @module services/frankfurter/currency-metadata
  */
 import { z } from '@cyanheads/mcp-ts-core';
-import type { Currency } from './types.js';
+import type { CoverageWindow } from './types.js';
 
 const MetadataSchema = z.array(
   z
@@ -20,7 +20,7 @@ const MetadataSchema = z.array(
 export async function fetchCurrencyMetadata(
   userAgent: string,
   signal?: AbortSignal,
-): Promise<Currency[] | undefined> {
+): Promise<CoverageWindow[] | undefined> {
   signal?.throwIfAborted();
   const requestSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(1_000)]);
   let body: unknown;
@@ -45,7 +45,7 @@ export async function fetchCurrencyMetadata(
   signal?.throwIfAborted();
   const parsed = MetadataSchema.safeParse(body);
   if (!parsed.success || parsed.data.length === 0) return;
-  const currencies = new Map<string, Currency>();
+  const currencies = new Map<string, CoverageWindow>();
   for (const row of parsed.data) {
     if (currencies.has(row.iso_code)) return;
     currencies.set(row.iso_code, {
