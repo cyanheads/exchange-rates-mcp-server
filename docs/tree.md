@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-11-03 07:47:32
+Generated on: 2026-11-16 09:40:42
 
 ```text
 exchange-rates-mcp-server/
@@ -30,6 +30,7 @@ exchange-rates-mcp-server/
 │   ├── 0.4.x/
 │   ├── 0.5.x/
 │   ├── 0.6.x/
+│   ├── 0.7.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -157,16 +158,17 @@ exchange-rates-mcp-server/
 │   │   │       ├── fx-rates-latest.resource.ts
 │   │   │       └── index.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── fx-convert-currency.tool.ts
-│   │           ├── fx-dataframe-describe.tool.ts
-│   │           ├── fx-dataframe-drop.tool.ts
-│   │           ├── fx-dataframe-query.tool.ts
-│   │           ├── fx-get-rate.tool.ts
-│   │           ├── fx-get-rates.tool.ts
-│   │           ├── fx-get-timeseries.tool.ts
-│   │           ├── fx-list-currencies.tool.ts
-│   │           └── index.ts
+│   │       ├── definitions/
+│   │       │   ├── fx-convert-currency.tool.ts
+│   │       │   ├── fx-dataframe-describe.tool.ts
+│   │       │   ├── fx-dataframe-drop.tool.ts
+│   │       │   ├── fx-dataframe-query.tool.ts
+│   │       │   ├── fx-get-rate.tool.ts
+│   │       │   ├── fx-get-rates.tool.ts
+│   │       │   ├── fx-get-timeseries.tool.ts
+│   │       │   ├── fx-list-currencies.tool.ts
+│   │       │   └── index.ts
+│   │       └── date-snap.ts
 │   ├── services/
 │   │   ├── canvas/
 │   │   │   └── canvas-accessor.ts

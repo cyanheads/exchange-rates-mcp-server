@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.0](changelog/0.7.x/0.7.0.md) — 2026-11-16 · ⚠️ Breaking
+
+fx_get_timeseries stages short series with stage: true, fx_list_currencies flags retired codes, and upstream_no_data names a currency's coverage bounds. fx_dataframe_query now refuses every pragma_* table function.
+
 ## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-11-02 · ⚠️ Breaking
 
 Historical FX coverage and analysis.
