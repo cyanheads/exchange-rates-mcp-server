@@ -282,6 +282,17 @@ describe('statutory euro rates', () => {
     },
   );
 
+  it('keeps the converted amount when the EUR intermediate is subnormal', async () => {
+    const result = await runToolContract(fxConvertCurrency, {
+      base_currency: 'ITL',
+      quote_currency: 'IDR',
+      date: '2026-03-02',
+      amount: 5e-321,
+    });
+    expect(result.structuredContent).toMatchObject({ quote_amount: 5.082e-320 });
+    expect(JSON.stringify(result.content)).toContain('5.082e-320 IDR');
+  });
+
   it('clips a mixed holiday window to an empty result, and pages a fixed-only range across weekends', async () => {
     const empty = await runToolContract(fxGetTimeseries, {
       base_currency: 'BGN',

@@ -28,6 +28,8 @@ import {
 import { redenominationNotice } from '@/services/frankfurter/redenomination.js';
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
+const MIN_NORMAL_NUMBER = 2 ** -1022;
+
 export const fxConvertCurrency = tool('fx_convert_currency', {
   inputAliases: {
     base: 'base_currency',
@@ -187,8 +189,8 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
     let quoteAmount = input.amount * resolved.rate;
     if (resolved.legs && resolved.baseCurrency !== resolved.quoteCurrency) {
       const amountInEur = input.amount / resolved.legs.base;
-      // Preserve the cross-rate product when the EUR intermediate overflows or underflows.
-      if (Number.isFinite(amountInEur) && amountInEur > 0) {
+      // Applying the second leg can magnify precision lost in a subnormal EUR amount.
+      if (Number.isFinite(amountInEur) && amountInEur >= MIN_NORMAL_NUMBER) {
         quoteAmount = amountInEur * resolved.legs.quote;
       }
     }

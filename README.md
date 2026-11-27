@@ -99,7 +99,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 - `base_currency`, `quote_currency`, `amount` (must be > 0) required; `date` optional (default latest, market history from 1999-01-04, no future dates)
 - A mixed conversion combines the market publication with the statutory factor effective on the requested date. `fixed_rates` identifies each affected leg. When the two dates differ, `fixed_rate_date` distinguishes the statutory date from `rate_date`. A fully fixed conversion uses the requested date (today in UTC for `latest`) and needs no upstream call.
-- Returns `quote_amount`, `rate`, `rate_date`, `date_snapped`, `rate_type` and `source`. Market conversions use `amount * rate`. Statutory cross-conversions divide the amount by the base units per EUR and multiply by the quote units per EUR, retaining floating-point precision through both steps. Payment rounding is left to the caller.
+- Returns `quote_amount`, `rate`, `rate_date`, `date_snapped`, `rate_type` and `source`. Market conversions use `amount * rate`. Statutory cross-conversions divide by the base units per EUR and multiply by the quote units per EUR. They use `amount * rate` when the EUR intermediate overflows, rounds to zero, or is subnormal. Payment rounding is left to the caller.
 - Typed failures include `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data` and `amount_out_of_range`. The last indicates the converted amount exceeds the numeric range.
 
 ---

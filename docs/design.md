@@ -210,7 +210,7 @@ Output includes `base_currency`, `quote_currency`, clipped `start_date`/`end_dat
 
 **Historical discovery.** `fx_list_currencies` with `include_retired=true` merges the statutory catalog with current v1 membership and optional ECB coverage. Each appended currency is marked `retired: true`. Adoption dates and legal factors remain available if the coverage lookup fails. The current-only resource uses market discovery.
 
-**Conversion precision.** Market conversions return the JavaScript-number product `amount * rate`. For statutory legs the original factors are applied through EUR, `(amount / baseLeg) * quoteLeg`, to avoid rounding a reciprocal or an intermediate amount. Identity preserves the amount.
+**Conversion precision.** Market conversions return the JavaScript-number product `amount * rate`. For statutory legs the original factors are applied through EUR, `(amount / baseLeg) * quoteLeg`, without rounding to currency units. If `amount / baseLeg` is zero, subnormal, or infinite, use `amount * rate` to preserve the result when representable. Identity preserves the amount.
 
 ## Known Limitations
 
