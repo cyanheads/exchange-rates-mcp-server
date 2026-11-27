@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "exchange-rates-mcp-server",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Query daily Frankfurter rates and convert currencies using fixed euro adoption rates.",
   "author": { "name": "cyanheads" },
   "homepage": "https://github.com/cyanheads/exchange-rates-mcp-server#readme",

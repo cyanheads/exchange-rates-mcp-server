@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/exchange-rates-mcp-server",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "mcpName": "io.github.cyanheads/exchange-rates-mcp-server",
   "description": "Query daily Frankfurter rates and convert currencies using fixed euro adoption rates. STDIO or Streamable HTTP.",
   "type": "module",

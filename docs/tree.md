@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-11-27 18:48:29
+Generated on: 2026-11-27 18:56:45
 
 ```text
 exchange-rates-mcp-server/
@@ -31,6 +31,7 @@ exchange-rates-mcp-server/
 │   ├── 0.5.x/
 │   ├── 0.6.x/
 │   ├── 0.7.x/
+│   ├── 0.8.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
