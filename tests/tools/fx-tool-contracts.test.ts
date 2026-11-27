@@ -25,6 +25,82 @@ const mockGetRates = vi.fn<(...args: unknown[]) => Promise<FrankfurterRateRespon
 const mockGetTimeSeries = vi.fn();
 
 describe('currency input aliases', () => {
+  const window = { start_date: '2024-06-03', end_date: '2024-06-04' };
+  it.each([
+    {
+      tool: fxGetRate,
+      extra: {},
+      aliases: [
+        ['from', 'to'],
+        ['from_currency', 'to_currency'],
+        ['base', 'symbol'],
+      ],
+    },
+    {
+      tool: fxConvertCurrency,
+      extra: { amount: 100 },
+      aliases: [
+        ['from', 'to'],
+        ['from_currency', 'to_currency'],
+      ],
+    },
+    {
+      tool: fxGetTimeseries,
+      extra: window,
+      aliases: [
+        ['from_currency', 'to_currency'],
+        ['base', 'symbol'],
+      ],
+    },
+  ])(
+    '$tool.name accepts direction aliases without advertising them',
+    async ({ tool, extra, aliases }) => {
+      const canonical = await runToolContract(tool as typeof fxGetRate, {
+        base_currency: 'usd',
+        quote_currency: 'eur',
+        ...extra,
+      });
+      expect(canonical.isError).toBeFalsy();
+      const properties = z.toJSONSchema(tool.input).properties!;
+      for (const [baseKey, quoteKey] of aliases) {
+        const fields = { [baseKey!]: 'usd', [quoteKey!]: 'eur', ...extra };
+        const response = await runToolContract(tool as typeof fxGetRate, fields as never);
+        expect(response.structuredContent).toEqual(canonical.structuredContent);
+        expect(response.content).toEqual(canonical.content);
+        for (const [key, canonicalKey] of [
+          [baseKey!, 'base_currency'],
+          [quoteKey!, 'quote_currency'],
+        ] as const) {
+          expect(properties).not.toHaveProperty(key);
+          const collision = await runToolContract(
+            tool as typeof fxGetRate,
+            { ...fields, [canonicalKey]: 'JPY' } as never,
+          );
+          expect(collision.isError).toBe(true);
+          expect(JSON.stringify(collision.content)).toContain('send one of them, not both');
+          expect(JSON.stringify(collision.structuredContent)).toContain(
+            'send one of them, not both',
+          );
+        }
+      }
+    },
+  );
+  it.each([
+    { tool: fxGetTimeseries, extra: window, fields: { from: 'USD', to: 'EUR' } },
+    { tool: fxGetRate, extra: {}, fields: { base: 'USD', symbols: ['EUR'] } },
+    { tool: fxConvertCurrency, extra: { amount: 100 }, fields: { base: 'USD', symbol: 'EUR' } },
+    { tool: fxGetRate, extra: {}, fields: { from: 'USD', from_currency: 'JPY', to: 'EUR' } },
+  ])(
+    '$tool.name rejects ambiguous or unsupported spellings $fields',
+    async ({ tool, extra, fields }) => {
+      const result = await runToolContract(
+        tool as typeof fxGetRate,
+        { ...extra, ...fields } as never,
+      );
+      expect(result.isError).toBe(true);
+    },
+  );
+
   const cases = [
     { tool: fxGetRate, extra: {}, pair: true, mock: mockGetRate },
     { tool: fxConvertCurrency, extra: { amount: 100 }, pair: true, mock: mockGetRate },
@@ -346,7 +422,7 @@ describe('date snap wording', () => {
     },
   ])('$tool.name names every snap cause without asserting one', async ({ tool, input }) => {
     expect(tool.output.shape.date_snapped.description).toBe(
-      'True when rate_date differs from the requested date: the requested date was a weekend or holiday, or its daily fix was not yet published. Frankfurter v1 snaps such requests to the prior published date. Always false when date is omitted.',
+      'True when Frankfurter v1 served a prior publication date because the requested daily fix was unavailable. False for fixed-only and latest results.',
     );
     const surface = JSON.stringify([
       tool.description,

@@ -7,6 +7,7 @@
  */
 
 import { McpError, notFound, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { successorGuidance } from './redenomination.js';
 import type { CoverageWindow, Currency } from './types.js';
 
 /**
@@ -69,13 +70,17 @@ export function unsupportedCurrency(
   const guidance = windows?.length
     ? ` Historical coverage (outer bounds, gaps may occur): ${windows.map((currency) => `${currency.code} (${currency.name}): ${currency.start_date} through ${currency.end_date}`).join('; ')}. Request a historical date within these bounds; use fx_list_currencies with include_retired=true for discovery.`
     : '';
-  return validationError(`${rejection} Accepted: ${accepted.join(', ')}.${guidance}`, {
-    accepted_codes: accepted,
-    field,
-    reason: 'unsupported_currency',
-    rejected_codes: rejected,
-    ...(windows?.length && { currency_windows: windows }),
-  });
+  const successor = successorGuidance(rejected, accepted);
+  return validationError(
+    `${rejection} Accepted: ${accepted.join(', ')}.${guidance}${successor ? ` ${successor}` : ''}`,
+    {
+      accepted_codes: accepted,
+      field,
+      reason: 'unsupported_currency',
+      rejected_codes: rejected,
+      ...(windows?.length && { currency_windows: windows }),
+    },
+  );
 }
 
 /** What a dated request asked for and the official bounds to compare it with. */
@@ -86,11 +91,17 @@ export interface CoverageContext {
   windows: CoverageWindow[];
 }
 
-/** One sentence placing the requested dates against a code's official outer bounds. */
-function coverageSentence({ start, end }: CoverageContext['requested'], window: CoverageWindow) {
+/** Place a fully missing request or a span of missing served days against official outer bounds. */
+export function coverageSentence(
+  { start, end }: CoverageContext['requested'],
+  window: CoverageWindow,
+  kind: 'request' | 'served-days' = 'request',
+): string {
   const currency = `${window.code} (${window.name})`;
   if (end < window.start_date) return `${currency} coverage begins ${window.start_date}.`;
   if (start > window.end_date) return `${currency} coverage ends ${window.end_date}.`;
+  if (kind === 'served-days')
+    return `Missing served days for ${currency} span dates overlapping its ${window.start_date} through ${window.end_date} coverage bounds; bounds can contain gaps.`;
   return start === end
     ? `${currency} has no published rate on ${start}, inside its ${window.start_date} through ${window.end_date} coverage bounds; bounds can contain gaps.`
     : `${currency} has no published rate from ${start} through ${end}, which overlaps its ${window.start_date} through ${window.end_date} coverage bounds; bounds can contain gaps.`;

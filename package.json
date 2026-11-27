@@ -2,7 +2,7 @@
   "name": "@cyanheads/exchange-rates-mcp-server",
   "version": "0.7.0",
   "mcpName": "io.github.cyanheads/exchange-rates-mcp-server",
-  "description": "Convert currencies, get FX rates, and query historical Frankfurter v1 exchange rate data via MCP. STDIO or Streamable HTTP.",
+  "description": "Query daily Frankfurter rates and convert currencies using fixed euro adoption rates. STDIO or Streamable HTTP.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -90,19 +90,20 @@
     "access": "public"
   },
   "dependencies": {
-    "@cyanheads/mcp-ts-core": "^0.13.22",
-    "@duckdb/node-api": "^1.5.6-r.2",
+    "@cyanheads/mcp-ts-core": "^0.13.24",
+    "@duckdb/node-api": "^2.0.1-r.1",
     "pino-pretty": "^13.2.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7",
+    "@biomejs/biome": "2.6.9",
     "@socketsecurity/bun-security-scanner": "^1.1.3",
-    "@types/node": "26.6.6",
+    "@types/node": "26.6.11",
+    "@vitest/coverage-istanbul": "^5.1.2",
     "depcheck": "^1.4.7",
-    "ignore": "^7.0.14",
-    "tsc-alias": "^1.9.10",
+    "ignore": "^7.0.17",
+    "tsc-alias": "^1.9.11",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.2"
   }
 }

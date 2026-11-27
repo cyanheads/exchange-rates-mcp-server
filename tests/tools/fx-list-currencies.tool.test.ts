@@ -96,9 +96,11 @@ describe('fx_list_currencies', () => {
   it('points every retirement description at retired rather than end_date', () => {
     const row = fxListCurrencies.output.shape.currencies.element.shape;
     expect(fxListCurrencies.description).toContain(
-      'include_retired=true adds historical codes absent from the current set, each marked retired=true.',
+      'include_retired=true adds historical and statutory euro legacy codes absent from the current set, each marked retired=true.',
     );
-    expect(fxListCurrencies.description).toContain('read retired, not end_date, for retirement.');
+    expect(fxListCurrencies.description).toContain(
+      'start_date/end_date are outer market coverage bounds.',
+    );
     expect(fxListCurrencies.input.shape.include_retired.description).toContain(
       'marked retired=true',
     );

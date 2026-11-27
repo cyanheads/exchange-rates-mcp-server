@@ -4,24 +4,24 @@ description: Analyze historical FX periods with fx_* tools, discover retired cur
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## Scope
 
-Use this keyless server for Frankfurter v1 daily reference-rate analysis. For a single converted amount use fx_convert_currency; for a rate use fx_get_rate; for a latest snapshot use fx_get_rates or fx://rates/latest/{base}. These rates do not establish an executable trade price or a required tax or accounting method.
+Use the rate tools for Frankfurter v1 daily observations and for the irrevocable conversion factors of former euro-area currencies. For a single amount use fx_convert_currency. For a market snapshot use fx_get_rates or fx://rates/latest/{base}. These figures do not establish an executable trade price or a required accounting method.
 
 ## Identifiers
 
-Resolve ambiguous currency names through fx_list_currencies. Its retired-currency discovery adds historical codes, each marked retired: true; read that flag, not end_date, for retirement. fx://currencies remains current-only. Coverage dates, when available, are outer bounds: an interior date can still lack a rate, and an upstream_no_data failure for a current currency carries currency_windows and names the bound that applies. If discovery reports unavailable coverage metadata, leave coverage unknown.
+Resolve currency names with fx_list_currencies. With include_retired enabled, use the adoption date and statutory factor for a legacy euro currency separately from its historical market coverage. A retired code can still convert after its last publication. A market coverage window can contain gaps. The fx://currencies resource lists current market codes.
 
 Take canvas_id and table_name from a staged fx_get_timeseries response. Each registration creates a unique table name; never construct it from the currency pair. Use fx_dataframe_describe to discover the exact names and column types before SQL.
 
 ## Gates
 
 - Establish the direction before comparing: a rate measures quote units per base unit. Keep that direction consistent across periods and SQL results.
-- Before calling an average a full-period result, inspect the returned observation bounds and coverage notice. Missing currency legs on served publication days reduce coverage; weekends and holidays are not missing observations. Report the observed interval and any coverage shortfall instead of filling gaps.
-- Treat truncated as a delivery flag, not proof of complete currency coverage. Read coverage notices even when truncated is false.
+- Read the rate source before comparing periods. Market rates follow publication days. Fully statutory periods run on calendar days. In a mixed conversion, the market fix can precede the date on which the statutory factor applies. For historical RON or TRY, check the notice for the units of the amount before converting it.
+- Check the missing currencies, dates and available coverage bounds even when truncated is false. A missing observation changes the full-period mean. Truncation limits only the preview.
 - Keep the initial requested-range summary for the period question. A continuation summarizes its own remaining interval; do not average page means.
 - Check rate_count and summary before interpreting an empty rates map. A summary-only response can contain observations without showing rows; a genuinely empty interval has no summary.
 - Use only dataframe tools advertised by the connected deployment. Before dropping a table, obtain the exact name with fx_dataframe_describe and confirm the requested deletion; do not automatically remove caller-owned tables.
@@ -32,11 +32,11 @@ For historical analysis, resolve the currency codes and available coverage, then
 
 ## Workflows
 
-**Period summary.** For an average, high, low, or endpoint movement, request zero preview observations with fx_get_timeseries. The summary and rate_count still cover every observed day in the requested interval. An arithmetic daily mean weights observations equally; it does not weight calendar days, transaction amounts, or exposure.
+**Period summary.** Request zero preview observations for a period average, high, low or endpoint movement. The summary and rate_count still cover every observation in the interval. Each observation receives equal weight, regardless of transaction amount or exposure.
 
 **Observation retrieval.** Follow next_start_date with the original end date to continue inline results. After a zero-limit response, use a positive limit to advance. When spilled is true, query the full staged table rather than treating rates as complete; reducing the preview never removes rows from that table.
 
-With DataCanvas enabled, results too large to return inline are staged as a DataCanvas table, and the response carries a canvas_id. Call fx_dataframe_describe with it for the staged table and column names before writing SQL, then fx_dataframe_query with a read-only query. Pass the same canvas_id back to stage further results beside the first; the tables expire with the canvas.
+With DataCanvas enabled, automatic staging requires both a range over the configured day threshold and observations exceeding the inline preview budget. Take canvas_id from the response and inspect the table with fx_dataframe_describe before querying it. Pass that canvas_id to stage further series alongside it. The tables expire with the canvas.
 
 **Compare series.** Request the first series with stage: true, which stages it on a new canvas even for a short range and returns the canvas_id. Pass that canvas_id, not stage again, to each subsequent fx_get_timeseries call so the other series land beside it; fx_dataframe_query reads one canvas at a time. A guessed canvas ID cannot create a workspace. If automatic staging already supplied a handle, reuse it. With DataCanvas unavailable, stage fails, so continue inline pages.
 

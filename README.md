@@ -1,6 +1,6 @@
 <div align="center">
   <h1>@cyanheads/exchange-rates-mcp-server</h1>
-  <p><b>Convert currencies, get FX rates, and query historical Frankfurter v1 exchange rate data via MCP. STDIO or Streamable HTTP.</b>
+  <p><b>Query daily Frankfurter rates and convert currencies using fixed euro adoption rates. STDIO or Streamable HTTP.</b>
   <div>7 Tools • 1 Opt-in Tool • 2 Resources</div>
   </p>
 </div>
@@ -29,7 +29,7 @@
 
 ## Overview
 
-Daily exchange rates from Frankfurter v1, with current currency discovery and historical coverage from 1999-01-04. Convert amounts, pull point-in-time or historical rates, summarize a full date range, and run SQL over staged series. Historical availability includes retired currencies and is checked against the requested data. Responses identify `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; the v1 payload does not identify individual providers. No API key required.
+Market rates come from Frankfurter v1, with observations from 1999-01-04. On its official configuration the server also converts 21 former euro-area currencies at irrevocable rates from each adoption date. For example, a BGN/USD conversion on 2026-03-02 uses 1.95583 BGN per EUR and that day’s USD observation. No API key is required.
 
 ### Tools
 
@@ -46,15 +46,15 @@ Daily exchange rates from Frankfurter v1, with current currency discovery and hi
 
 DataCanvas (DuckDB) is on by default. Set `CANVAS_PROVIDER_TYPE=none` to turn it off: the three `fx_dataframe_*` tools then drop out of `tools/list`, and `fx_get_timeseries` returns ranges inline when `canvas_id` and `stage` are omitted; explicit staging (`canvas_id` or `stage: true`) fails `canvas_unavailable`. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native binding, so it runs with DataCanvas off. `fx_dataframe_drop` additionally needs `FX_ENABLE_CANVAS_DROP=true`.
 
-The four rate and conversion tools accept `base` as an alias of `base_currency`; pair tools also accept `quote` for `quote_currency`. Send either spelling for a field, never both. Advertised schemas use the canonical names.
+The four rate tools accept `base`. Pair tools also accept `quote`, `from_currency` and `to_currency`. For `fx_get_rate` and `fx_convert_currency`, `from` and `to` identify the currencies. `symbol` is a quote alias on `fx_get_rate` and `fx_get_timeseries`. Supply one spelling per field. The advertised schemas use canonical names.
 
-Currency values, including `symbols`, are trimmed and uppercased. Point dates accept `YYYY-MM-DD` or literal `latest` (also the default); range dates require `YYYY-MM-DD`. Advertised date patterns preserve handler-level `invalid_date_format` errors for malformed, blank or impossible calendar dates. Future range errors recommend an `end_date` today or earlier; `end_date` remains required.
+Currency values, including `symbols`, are trimmed and uppercased. Point dates accept `YYYY-MM-DD` or `latest`. Ranges require both ISO dates. Malformed calendar dates return `invalid_date_format`. Historical official rates in RON before 2005-07-01 and TRY before 2005-01-01 use restated units. Convert old amounts first. 10,000 ROL equals 1 RON and 1,000,000 TRL equals 1 TRY.
 
 ### Resources
 
 | Resource | Description |
 |:---|:---|
-| `fx://currencies` | All supported currencies as a stable reference document |
+| `fx://currencies` | Current Frankfurter currencies as a stable reference document |
 | `fx://rates/latest/{base}` | Latest rates snapshot for a base currency as a stable URI |
 
 All resource data is also reachable via tools — use `fx_list_currencies` or `fx_get_rates` for programmatic access.
@@ -70,15 +70,15 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 ### `fx_list_currencies` <sub>tool</sub>
 
 - Optional `include_retired` (default `false`) adds historical codes absent from current v1 discovery; the rows it appends carry `retired: true`
-- Returns `currencies: [{ code, name, start_date?, end_date?, retired }]`, `count`, `source` and `as_of` (the latest served daily rate date, read uncached on every call so it matches the `rate_date` of a latest-rate call), sorted alphabetically by code. Coverage dates come from optional official ECB metadata and describe outer bounds, not uninterrupted availability. Read `retired`, not `end_date`, for retirement.
+- Each currency has a code, name and `retired` flag. Optional ECB start and end dates describe outer bounds that can contain gaps. Discovery also returns `count`, `source` and `as_of`, the latest served market date.
 - Metadata is cached for a day (a failed read is retried after five minutes) and queried only for the default official v1 base. Unavailable metadata leaves current discovery intact with a notice; valid v1 rate requests never depend on metadata.
-- Default discovery lists current currencies; `include_retired: true` adds historical codes when metadata is available. Historical requests validate against their unfiltered EUR snapshot or raw served range, so retired codes remain usable on dates where they have observations. Unknown codes fail `unsupported_currency` with sorted accepted/rejected codes and the input field; current currencies without historical observations fail `upstream_no_data`, with `currency_windows` and a sentence naming the coverage bound when ECB coverage metadata is available.
+- With `include_retired: true`, each statutory currency has `adoption_date` and `units_per_eur`. The response names their legal source in `fixed_rate_source`. These factors are available even when optional ECB market coverage metadata is unavailable.
 
 ---
 
 ### `fx_get_rates` <sub>tool</sub>
 
-- `base_currency` required; `date` optional (default latest, history from 1999-01-04, no future dates); optional `symbols` array narrows the response and must name at least one code
+- `base_currency` required; `date` optional (default latest, market history from 1999-01-04, no future dates); optional `symbols` array narrows the response and must name at least one code
 - Returns a `rates` map (quote code → rate), the actual `rate_date`, and `date_snapped: true` when a weekend, a holiday, or a day whose fix is not yet published snapped to the prior published date
 - Naming the base currency in `symbols` is valid — answered locally with a rate of 1 rather than sent upstream
 - Missing observations from a served snapshot identify the offending `field` and sorted, deduplicated `missing_codes`, plus `currency_windows` and a sentence naming the bound (coverage begins or ends, or a date or range inside the bounds that can contain gaps) when ECB coverage metadata is available; unknown currencies retain `unsupported_currency` precedence. A response without any snapshot remains an unattributed `upstream_no_data` failure.
@@ -88,31 +88,31 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 
 ### `fx_get_rate` <sub>tool</sub>
 
-- `base_currency`, `quote_currency` required; `date` optional (default latest, history from 1999-01-04, no future dates)
+- `base_currency`, `quote_currency` required; `date` optional (default latest, market history from 1999-01-04, no future dates)
 - Returns `rate`, `rate_date`, and `date_snapped: true` when a weekend, a holiday, or a day whose fix is not yet published snapped to the prior published date
-- Every pair uses quote EUR leg / base EUR leg from one unfiltered EUR snapshot without intermediate rounding; EUR's leg is 1. Same-currency pairs return 1 only on actual observation dates.
+- Rates divide the quote EUR leg by the base EUR leg without intermediate rounding. A statutory-only pair resolves locally, including an identity pair. A market leg requires a published observation.
 - Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
 
 ---
 
 ### `fx_convert_currency` <sub>tool</sub>
 
-- `base_currency`, `quote_currency`, `amount` (must be > 0) required; `date` optional (default latest, history from 1999-01-04, no future dates)
-- Handles EUR↔any, any↔EUR, and cross-rate pairs (e.g. USD→JPY) in a single upstream call
-- Returns `quote_amount` as the unrounded JavaScript-number `amount * rate` product, `rate`, `rate_date`, `date_snapped`, plus `rate_type` and `source` provenance. No currency minor-unit rounding policy is applied; formatted rates use quote currency per base currency.
-- Typed failures: `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data`
+- `base_currency`, `quote_currency`, `amount` (must be > 0) required; `date` optional (default latest, market history from 1999-01-04, no future dates)
+- A mixed conversion combines the market publication with the statutory factor effective on the requested date. `fixed_rates` identifies each affected leg. When the two dates differ, `fixed_rate_date` distinguishes the statutory date from `rate_date`. A fully fixed conversion uses the requested date (today in UTC for `latest`) and needs no upstream call.
+- Returns `quote_amount`, `rate`, `rate_date`, `date_snapped`, `rate_type` and `source`. Market conversions use `amount * rate`. Statutory cross-conversions divide the amount by the base units per EUR and multiply by the quote units per EUR, retaining floating-point precision through both steps. Payment rounding is left to the caller.
+- Typed failures include `invalid_date_format`, `unsupported_currency`, `date_out_of_range`, `upstream_no_data` and `amount_out_of_range`. The last indicates the converted amount exceeds the numeric range.
 
 ---
 
 ### `fx_get_timeseries` <sub>tool</sub>
 
-- `base_currency`, `quote_currency`, `start_date`, `end_date` required (history from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
+- `base_currency`, `quote_currency`, `start_date`, `end_date` required (market history from 1999-01-04, no future dates, start ≤ end); optional `canvas_id` appends to an existing canvas
 - Optional `stage` (default `false`): `true` stages the complete series on a new canvas whose `canvas_id` is returned, even for short or empty ranges. To stage another series beside it, pass that `canvas_id` rather than `stage: true` again, since `fx_dataframe_query` reads one canvas at a time. `canvas_id` always stages, whatever `stage` says.
 - Optional integer `limit` (default 500, minimum 0) bounds returned observations, clamping values above 500 with a notice. `limit: 0` returns summary and metadata with empty `rates`; a nonempty inline result then points `next_start_date` at the first observation. Repeat with a positive limit to advance. Counts, summary, bounds, staging eligibility and complete staged tables are independent of the limit.
-- Inline results page at up to 500 observed publication days — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
+- Inline results page at up to 500 observations — `rate_count` is always the range total; `truncated: true` plus `next_start_date` continue the page
 - Ranges over `FX_TIMESERIES_CANVAS_THRESHOLD_DAYS` (default 90 days) are considered for DataCanvas staging. Series over the 40,000-character preview budget return `spilled: true`, `canvas_id`, and `table_name`; smaller series and deployments with `CANVAS_PROVIDER_TYPE=none` page inline
-- A same-currency pair returns 1 on actual observation dates. Every non-identity row requires both EUR legs on that same date; missing legs never fabricate observations. Membership uses all raw served dates before inclusive clipping, preserving weekend-only empty windows.
-- Missing either leg on a served in-window day produces a notice with the affected day count and first/last dates. Each day counts once, even if both legs are absent; weekends, holidays and clipped prior dates do not count. Statistics cover observed days only. Coverage and delivery notices coexist; `truncated` describes omitted observations in delivery, not missing upstream coverage.
+- Market series follow served publication dates. A pair of wholly fixed legs has one rate per calendar day from adoption. Series that cross an adoption date can contain both kinds of observation. For affected staged tables, the `source` column identifies the provenance of each row.
+- A coverage notice names the missing currencies, counts each affected publication day once, and gives first/last affected dates. Where available it adds each currency’s ECB coverage bounds. Paging and staging preserve that notice.
 - An empty range (weekends, holidays, a fix not yet published, or currency gaps) returns `rate_count: 0` with an explanatory `notice`, distinguishable from an error
 - Whether a long range overflows the preview is measured before any canvas is acquired, so a series that fits inline never acquires one (pending cyanheads/mcp-ts-core#501); a failed or cancelled staging call releases the canvas it acquired. A supplied canvas remains available.
 - An explicit `canvas_id` or `stage: true` always stages the complete result, including short and empty ranges, using `rate DOUBLE`. Each table name has a fresh identifier suffix; repeated and concurrent calls preserve all earlier tables. Unknown IDs fail `canvas_not_found`, whose recovery names `stage: true`; disabled DataCanvas fails `canvas_unavailable`. `truncated` is false when the preview includes every observation.
@@ -134,7 +134,7 @@ Cancelling a tool call or resource read stops its upstream fetch, response-body 
 - `canvas_id` and a read-only SQL `query` required; `row_limit` is a positive integer (default 150). Values above the canvas row cap (`CANVAS_DEFAULT_ROW_LIMIT`, 10,000 by default) clamp to it, the default 150 included, with requested/effective values in a notice; clamping and truncation notices coexist and paging guidance uses the effective limit.
 - Supports aggregations, GROUP BY, window functions, and JOINs across tables from multiple `fx_get_timeseries` calls
 - Returns at most `row_limit` rows; `truncated: true` plus a `notice` give the `ORDER BY <column> LIMIT <n> OFFSET <m>` shape for the next page — ORDER BY is required for stable paging
-- Markdown table cells are escaped so pipes, angle brackets, and line breaks stay inside their cell; `structuredContent` keeps raw values
+- Nested SQL results (STRUCT, MAP and LIST) render as JSON in Markdown cells. Table escaping preserves embedded pipes and markup. SQL NULL renders as an empty cell. In DuckDB 2, integer `//` or `%` by zero returns `invalid_query`. Use `TRY(expression)` for SQL NULL.
 - Unregistered when `CANVAS_PROVIDER_TYPE=none`; typed failures: `canvas_not_found`, `missing_table`, `invalid_query`
 
 ---
@@ -168,9 +168,9 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 Rate data:
 
 - Keyless daily data via [Frankfurter v1](https://www.frankfurter.dev/v1/)
-- Local cross-rate calculation from one unfiltered EUR data request per snapshot or range; the same response supplies historical membership
+- Market cross-rates share one unfiltered EUR snapshot or range. Statutory-only calls resolve locally.
 - Date-snap semantics: `date_snapped` surfaces when the API returns a different date than requested, whether the day was a weekend, a holiday, or a day whose fix is not yet published
-- Identity rates are computed locally as 1 on the currency's observed publication dates
+- A market identity returns 1 on observed publication dates. A wholly statutory identity returns 1 on calendar dates from adoption.
 - Long time-series that exceed the inline preview budget stage on DataCanvas (DuckDB, on by default) for SQL aggregation over the full range
 
 Agent-friendly output:
@@ -397,7 +397,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 - Use `ctx.log` for request-scoped logging, `ctx.state` for tenant-scoped storage
 - Register new tools and resources via the barrels in `src/mcp-server/*/definitions/index.ts`
 - Wrap external API calls: validate raw → normalize to domain type → return output schema; never fabricate missing fields
-- Preserve the `rate_type: "Daily rate (Frankfurter v1)"` and `source: "Frankfurter v1"` provenance in every response
+- Preserve the origin of every rate in `rate_type` and `source`, including calculations that combine a statutory factor with a market observation.
 
 ---
 

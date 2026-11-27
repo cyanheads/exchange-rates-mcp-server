@@ -124,7 +124,7 @@ ENV NODE_ENV=production
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 ARG APP_VERSION
 LABEL org.opencontainers.image.title="exchange-rates-mcp-server"
-LABEL org.opencontainers.image.description="Convert currencies, get FX rates, and query historical Frankfurter v1 exchange rate data via MCP. STDIO or Streamable HTTP."
+LABEL org.opencontainers.image.description="Query daily Frankfurter rates and convert currencies using fixed euro adoption rates. STDIO or Streamable HTTP."
 LABEL org.opencontainers.image.source="https://github.com/cyanheads/exchange-rates-mcp-server"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.version="${APP_VERSION}"

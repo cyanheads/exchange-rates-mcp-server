@@ -53,7 +53,8 @@ it.each([
     );
     expect(child.error).toBeUndefined();
     expect(child.status).toBe(0);
-    expect(child.stdout).toContain(`PROVIDER=${provider}`);
+    expect(child.stdout).toBe('');
+    expect(child.stderr).toContain(`PROVIDER=${provider}`);
     const startup = child.stderr
       .split('\n')
       .filter((line) => line.startsWith('{'))

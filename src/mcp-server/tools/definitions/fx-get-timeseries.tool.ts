@@ -12,13 +12,29 @@ import {
 } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
+import {
+  fixedRatesSchema,
+  formatFixedRates,
+  RATE_SOURCE_DESCRIPTION,
+  RATE_TYPE_DESCRIPTION,
+} from '@/mcp-server/tools/statutory-rate-output.js';
 import { getCanvas } from '@/services/canvas/canvas-accessor.js';
-import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
+import {
+  coverageSentence,
+  failureOf,
+  unsupportedCurrencyCodesOf,
+} from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
   isIsoDate,
+  supportedBeforeV1,
 } from '@/services/frankfurter/frankfurter-service.js';
+import { redenominationNotice } from '@/services/frankfurter/redenomination.js';
+import {
+  MARKET_PROVENANCE,
+  statutoryProvenance,
+} from '@/services/frankfurter/statutory-euro-rates.js';
 import type { SeriesRow, TimeSeriesResult } from '@/services/frankfurter/types.js';
 
 /**
@@ -59,8 +75,14 @@ const SERIES_SCHEMA: ColumnSchema[] = [
 ];
 
 export const fxGetTimeseries = tool('fx_get_timeseries', {
-  inputAliases: { base: 'base_currency', quote: 'quote_currency' },
-  description: `Get historical daily Frankfurter v1 rates over an inclusive date range. Same-date EUR legs are divided without intermediate rounding; only days with both currencies appear, including observed self-pairs at 1 and historical retired currencies. Missing-leg served days produce coverage notices; weekends and holidays are not counted as missing. summary covers all observed days before delivery: arithmetic mean, earliest tied extrema, endpoints and percentage change, without accounting policy. limit bounds returned rows (default/max ${INLINE_PAGE_SIZE}); 0 returns summary only. Continue inline with next_start_date, the same end_date and a positive limit. Long ranges (>90 days by default) stage beyond the 40,000-character preview budget, independently of limit. canvas_id, or stage: true on a new canvas, always stages the complete series, including short/empty results; either fails without DataCanvas, and an unknown canvas_id fails. Pass the returned canvas_id to stage another series beside it. Each registration preserves earlier tables with a unique table_name. spilled=true returns canvas_id and table_name; use fx_dataframe_describe then fx_dataframe_query for SQL. Without DataCanvas, omit canvas_id and stage to page inline.`,
+  inputAliases: {
+    base: 'base_currency',
+    quote: 'quote_currency',
+    from_currency: 'base_currency',
+    to_currency: 'quote_currency',
+    symbol: 'quote_currency',
+  },
+  description: `Get historical rates over an inclusive date range. Market-dependent rates appear on Frankfurter v1 publication days with both legs available. Statutory euro factors apply to legacy currencies from adoption, with calendar-day rows when a statutory currency is paired with EUR or another active statutory currency. Missing-leg publication days produce coverage notices. summary covers all observations: arithmetic mean, earliest tied extrema, endpoints and percentage change. limit bounds returned rows (default/max ${INLINE_PAGE_SIZE}); 0 returns summary only. Continue inline with next_start_date, the same end_date and a positive limit. Long ranges (>90 days by default) stage beyond the 40,000-character preview budget, independently of limit. canvas_id, or stage: true on a new canvas, always stages the complete series, including short/empty results; either fails without DataCanvas, and an unknown canvas_id fails. Pass the returned canvas_id to stage another series beside it. Each registration preserves earlier tables with a unique table_name. spilled=true returns canvas_id and table_name; use fx_dataframe_describe then fx_dataframe_query for SQL. Without DataCanvas, omit canvas_id and stage to page inline.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -81,7 +103,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .string()
       .meta({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })
       .describe(
-        'ISO 8601 start date (YYYY-MM-DD). Frankfurter v1 data starts 1999-01-04. The actual first data point is later when no rate was published on start_date (a weekend, a holiday, or a currency gap).',
+        'ISO 8601 start date (YYYY-MM-DD). Frankfurter v1 data starts 1999-01-04; fixed-only rates start at euro adoption. The first observation can be later than this start.',
       ),
     end_date: z
       .string()
@@ -113,16 +135,12 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     start_date: z
       .string()
       .describe(
-        'First observed publication date in the requested range, including when limit is 0. Always inside ' +
-          'the requested range — later than the requested start when that day had no Frankfurter v1 fix, and ' +
-          'equal to it when the series is empty.',
+        'First observation date inside the requested range, including when limit is 0. Equals the requested start when the series is empty.',
       ),
     end_date: z
       .string()
       .describe(
-        'Last publication date in the requested range. Always inside the requested range — earlier ' +
-          'than the requested end when that day had no Frankfurter v1 fix, and equal to it when the series is ' +
-          'empty. Later than the last key in rates when truncated is true.',
+        'Last observation date inside the requested range. Equals the requested end when the series is empty. It can extend beyond the returned preview.',
       ),
     rates: z
       .record(z.string(), z.number())
@@ -132,9 +150,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     rate_count: z
       .number()
       .describe(
-        'Total observed publication days in the requested range (the start_date through end_date passed on ' +
-          'this call) — not the number of entries in rates, which is smaller when truncated is true. ' +
-          'On a continuation call it counts the days from that start_date onward.',
+        'Total observation days inside the requested range. Includes all observations when rates is truncated. On a continuation it counts observations from that start_date onward.',
       ),
     summary: z
       .object({
@@ -158,13 +174,13 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         first: z
           .object({
             rate: z.number().describe('First rate.'),
-            date: z.string().describe('First publication date.'),
+            date: z.string().describe('First observation date.'),
           })
           .describe('Chronologically first observation.'),
         last: z
           .object({
             rate: z.number().describe('Last rate.'),
-            date: z.string().describe('Last publication date.'),
+            date: z.string().describe('Last observation date.'),
           })
           .describe('Chronologically last observation.'),
         change_pct: z.number().describe('Percentage change from first to last observation.'),
@@ -177,22 +193,19 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .boolean()
       .describe(
         'True when rates holds only part of the series: an inline page (next_start_date continues ' +
-          'it) or a spilled preview (spilled is true). False when rates holds every publication day ' +
+          'it) or a spilled preview (spilled is true). False when rates holds every observation ' +
           'in the requested range.',
       ),
     next_start_date: z
       .string()
       .optional()
       .describe(
-        'Present only when an inline page was cut short: the first publication date not in rates. ' +
+        'Present only when an inline page was cut short: the first observation date not in rates. ' +
           'Pass it as start_date with the same end_date and a positive limit to get the next page. For limit 0 it is the first observation. Absent on the final page and staged results.',
       ),
-    rate_type: z
-      .string()
-      .describe(
-        'Always "Daily rate (Frankfurter v1)" — these are reference rates, not tradeable bid/ask.',
-      ),
-    source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
+    rate_type: z.string().describe(RATE_TYPE_DESCRIPTION),
+    source: z.string().describe(RATE_SOURCE_DESCRIPTION),
+    fixed_rates: fixedRatesSchema,
     spilled: z
       .boolean()
       .describe(
@@ -219,10 +232,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       .string()
       .optional()
       .describe(
-        'Explains a result that would otherwise look broken or incomplete: an empty series (no ' +
-          'publication day in the range); an inline page cut short (the start_date to continue ' +
-          'from, plus why a long range was not staged when DataCanvas is turned off); or a ' +
-          'spilled series (the canvas and table it was staged to, and the tools that read it).',
+        'Discloses missing currency observations and known coverage bounds, restated historical units, and empty, clamped, paged or staged delivery.',
       ),
   },
 
@@ -242,7 +252,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     {
       reason: 'date_out_of_range',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'start_date is before 1999-01-04 or end_date is in the future.',
+      when: 'start_date precedes 1999-01-04 without an applicable fixed-only rate, or end_date is in the future.',
       recovery: "Use start_date on or after 1999-01-04 and end_date on or before today's date.",
     },
     {
@@ -295,7 +305,10 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       }
     }
 
-    if (input.start_date < ECB_START_DATE) {
+    if (
+      input.start_date < ECB_START_DATE &&
+      !supportedBeforeV1(input.start_date, input.base_currency, [input.quote_currency])
+    ) {
       throw ctx.fail(
         'date_out_of_range',
         `start_date ${input.start_date} is before Frankfurter v1 data start ${ECB_START_DATE}.`,
@@ -356,16 +369,34 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       throw err;
     }
 
-    const { rows, startDate: actualStart, endDate: actualEnd } = series;
+    const { rows, startDate: actualStart, endDate: actualEnd, statutory } = series;
+    const provenance = statutory ? statutoryProvenance(statutory.market) : MARKET_PROVENANCE;
+    const observationDays = statutory ? 'observation days' : 'publication days';
     const limit = Math.min(input.limit ?? INLINE_PAGE_SIZE, INLINE_PAGE_SIZE);
     const notices: string[] = [];
     if (input.limit !== undefined && input.limit > INLINE_PAGE_SIZE)
       notices.push(`limit=${input.limit} was clamped to ${INLINE_PAGE_SIZE}.`);
     if (series.missingCoverage) {
       const coverage = series.missingCoverage;
+      const codes = coverage.codes.map(({ code }) => code).join(', ');
+      const days = coverage.count === 1 ? 'publication day' : 'publication days';
+      const dates =
+        coverage.firstDate === coverage.lastDate
+          ? `on ${coverage.firstDate}`
+          : `from ${coverage.firstDate} through ${coverage.lastDate}`;
       notices.push(
-        `${coverage.count} served publication days from ${coverage.firstDate} through ${coverage.lastDate} are missing either currency leg. Summary statistics cover observed days only; weekends, holidays and dates outside the requested window are not counted as missing coverage.`,
+        `Missing coverage on ${coverage.count} served ${days} ${dates}. Currencies missing on one or more of those days: ${codes}.`,
       );
+      for (const { start, end, window } of coverage.codes) {
+        if (window) notices.push(coverageSentence({ start, end }, window, 'served-days'));
+      }
+      notices.push(
+        'Summary statistics cover observed days only; weekends, holidays and dates outside the requested window are not counted as missing coverage.',
+      );
+    }
+    if (rows[0]) {
+      const units = redenominationNotice(rows[0].date, [base, quote]);
+      if (units) notices.push(units);
     }
     if (rows.length === 0)
       notices.push(
@@ -416,12 +447,16 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
       quote_currency: quote,
       start_date: actualStart,
       end_date: actualEnd,
-      rate_type: 'Daily rate (Frankfurter v1)',
-      source: 'Frankfurter v1',
+      rate_type: provenance.rateType,
+      source: provenance.source,
+      ...(statutory && { fixed_rates: statutory.fixedRates }),
       ...(summary && { summary }),
     };
 
     if (canvas != null && (explicit || (exceedsThreshold && overflowsPreview(rows)))) {
+      const schema: ColumnSchema[] = statutory
+        ? [...SERIES_SCHEMA, { name: 'source', type: 'VARCHAR', nullable: false }]
+        : SERIES_SCHEMA;
       let instance: CanvasInstance;
       try {
         instance = await canvas.acquire(input.canvas_id, ctx);
@@ -446,7 +481,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         ctx.signal.throwIfAborted();
         if (explicit) {
           const handle = await instance.registerTable(tableName, rows, {
-            schema: SERIES_SCHEMA,
+            schema,
             signal: ctx.signal,
           });
           ctx.signal.throwIfAborted();
@@ -469,7 +504,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
         const spillResult = await spillover({
           canvas: instance,
           source: rows,
-          schema: SERIES_SCHEMA,
+          schema,
           tableName,
           previewChars: PREVIEW_CHARS,
           signal: ctx.signal,
@@ -528,7 +563,7 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     if (rows.length === 0) {
       ctx.enrich.notice(notices.join(' '));
     } else if (nextRow) {
-      const pageNote = `rates holds the first ${page.length} of ${rows.length} observed publication days${page.length ? ` (${page[0]?.date} to ${page.at(-1)?.date})` : ' (summary only)'}. Call fx_get_timeseries again with start_date=${nextRow.date} and end_date=${input.end_date} and a positive limit for the next page.`;
+      const pageNote = `rates holds the first ${page.length} of ${rows.length} ${statutory ? observationDays : `observed ${observationDays}`}${page.length ? ` (${page[0]?.date} to ${page.at(-1)?.date})` : ' (summary only)'}. Call fx_get_timeseries again with start_date=${nextRow.date} and end_date=${input.end_date} and a positive limit for the next page.`;
       notice(unstaged ? `${pageNote} ${unstaged}` : pageNote);
     } else if (unstaged) {
       notice(unstaged);
@@ -550,10 +585,16 @@ export const fxGetTimeseries = tool('fx_get_timeseries', {
     const rateEntries = Object.entries(result.rates).sort(([a], [b]) => a.localeCompare(b));
     const lines: string[] = [
       `**${result.base_currency}/${result.quote_currency} time series** — ${result.start_date} to ${result.end_date}`,
-      `*${result.rate_count} publication-day data points in range · ${result.rate_type} · ${result.source} · spilled: ${result.spilled}*`,
+      `*${result.rate_count} ${result.fixed_rates ? 'calendar or publication-day' : 'publication-day'} data points in range · ${result.rate_type} · ${result.source} · spilled: ${result.spilled}*`,
       `*${rateEntries.length} shown · truncated: ${result.truncated}` +
         (result.next_start_date ? ` · next_start_date: ${result.next_start_date}*` : '*'),
     ];
+    if (result.fixed_rates) {
+      lines.push(formatFixedRates(result.fixed_rates).trimStart());
+      lines.push(
+        'Each fixed factor applies from its effective date. Calendar dates appear when the pair is fixed; market observations use publication dates.',
+      );
+    }
 
     if (result.spilled) {
       lines.push(

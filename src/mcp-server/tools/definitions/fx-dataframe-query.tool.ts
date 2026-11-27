@@ -76,15 +76,12 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     row_count: z
       .number()
       .describe(
-        'Rows returned — always the length of rows. When truncated is true this equals row_limit, ' +
-          'not the full result size.',
+        'Number of rows returned. When truncated is true, this equals the effective limit after applying the server row cap.',
       ),
     truncated: z
       .boolean()
       .describe(
-        'True when the query produced more rows than row_limit and rows holds only the first ' +
-          'row_limit of them. Fetch the rest with ORDER BY <column> LIMIT <n> OFFSET <m> — ORDER BY is ' +
-          'required for deterministic paging — or aggregate to shrink the result.',
+        'True when more rows exist beyond the effective row limit. Use ORDER BY with LIMIT and OFFSET for deterministic paging, or aggregate to shrink the result.',
       ),
     canvas_id: z
       .string()
@@ -202,10 +199,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
         : '';
     if (truncated) {
       ctx.enrich.notice(
-        `${clampNotice}The query produced more than ${rowLimit} rows; rows holds the first ${rowLimit}. ` +
-          `For the next page re-run it with ORDER BY <column> LIMIT ${rowLimit} OFFSET ${rowLimit} ` +
-          '(raise OFFSET by the limit each page). ORDER BY is required: without it DuckDB does not ' +
-          'guarantee the same row order across pages. Aggregating or filtering shrinks the result instead.',
+        `${clampNotice}The query produced more than ${rowLimit} rows. For repeatable paging, ORDER BY is required. Keep the original SELECT, including its LIMIT and OFFSET, inside SELECT * FROM (<original SELECT>) AS page ORDER BY <stable output keys> LIMIT ${rowLimit} OFFSET ${rowLimit}. Omit the inner trailing semicolon. Match the original ordering, or restart at OFFSET 0 if you cannot reproduce that order with the output columns. Increase the outer OFFSET by ${rowLimit} per page.`,
       );
     } else if (clampNotice) {
       ctx.enrich.notice(clampNotice.trim());
@@ -221,7 +215,7 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
 
   format: (result) => {
     const capNote = result.truncated
-      ? '\n⚠️ *truncated: yes — the query produced more rows than row_limit; only these were returned.*'
+      ? `\n⚠️ *truncated: yes — showing the first ${result.row_count} rows.*`
       : '\n*truncated: no*';
     if (result.rows.length === 0) {
       return [
@@ -236,7 +230,16 @@ export const fxDataframeQuery = tool('fx_dataframe_query', {
     const table = [
       toRow(cols),
       `| ${cols.map(() => '---').join(' | ')} |`,
-      ...result.rows.map((r) => toRow(cols.map((c) => String(r[c] ?? '')))),
+      ...result.rows.map((row) =>
+        toRow(
+          cols.map((col) => {
+            const value = row[col];
+            return value !== null && typeof value === 'object'
+              ? JSON.stringify(value)
+              : String(value ?? '');
+          }),
+        ),
+      ),
     ].join('\n');
     return [
       {

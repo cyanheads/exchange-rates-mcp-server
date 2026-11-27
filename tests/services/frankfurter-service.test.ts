@@ -173,7 +173,10 @@ describe('getRate', () => {
     expect(result.rows).toEqual([
       { date: '2005-06-02', rate: 4, base_currency: 'CYP', quote_currency: 'USD' },
     ]);
-    expect(requestedUrls()).toHaveLength(1);
+    expect(requestedUrls()).toEqual([
+      'https://api.frankfurter.dev/v1/2005-06-01..2005-06-06?base=EUR',
+      'https://api.frankfurter.dev/v2/currencies?scope=all&providers=ECB',
+    ]);
   });
 
   it.each(['USD', 'CYP'])(

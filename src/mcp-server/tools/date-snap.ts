@@ -7,7 +7,11 @@
 
 /** The `date_snapped` output description. */
 export const DATE_SNAPPED_DESCRIPTION =
-  'True when rate_date differs from the requested date: the requested date was a weekend or holiday, or its daily fix was not yet published. Frankfurter v1 snaps such requests to the prior published date. Always false when date is omitted.';
+  'True when Frankfurter v1 served a prior publication date because the requested daily fix was unavailable. False for fixed-only and latest results.';
+
+/** Date shared by the point, conversion and bulk output contracts. */
+export const RATE_DATE_DESCRIPTION =
+  'Served market publication date, or the requested date (current UTC date for latest) for a fixed-only result.';
 
 /** The `format()` line for a snapped rate, naming the published date served instead. */
 export const dateSnapNote = (rateDate: string) =>

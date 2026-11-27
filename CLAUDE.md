@@ -2,7 +2,7 @@
 
 **Server:** exchange-rates-mcp-server
 **Version:** 0.7.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.24`
 **Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
@@ -44,9 +44,9 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ## Patterns
 
-Rates use one unfiltered EUR snapshot/range per request: divide quote leg by base leg locally without intermediate rounding (EUR = 1); conversion amounts retain the unrounded JavaScript-number product. Historical membership uses raw served data before inclusive clipping, including retired currencies; latest membership uses current discovery. `fx_list_currencies` adds retired discovery with `include_retired`, marking appended rows `retired: true`; `fx://currencies` stays current-only. Both expose `as_of`, read uncached from `/latest?base=EUR` on every call so it matches a latest-rate call's `rate_date` (the currency list and metadata keep their day-long caches), and optional official ECB coverage outer bounds, never proof against interior gaps. V1 membership determines retirement, not metadata end_date. Metadata is optional, official-base-only, cached daily (a failed read retries after five minutes), bounded to one second with no retries, and never required for a successful rate call. Discovery discloses unavailable metadata. V1 reads share a 12-second deadline across retries. Provenance is literally `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`; never infer individual providers from v1 payloads. Currency values are trimmed and uppercased; advertised date patterns are metadata so handler-level typed date errors remain reachable. Preserve field/missing_codes/currency_windows for absent observations through every upstream_no_data rethrow; generic 404 failures carry no invented attribution. A snapped date has three causes (weekend, TARGET holiday, the day's fix not yet published), so snap wording from `src/mcp-server/tools/date-snap.ts` names all three and asserts none.
+Market legs use one unfiltered EUR snapshot/range per request: divide quote leg by base leg locally without intermediate rounding (EUR = 1); conversion amounts retain the unrounded JavaScript-number product. Historical membership uses raw served data before inclusive clipping, including retired currencies; latest membership uses current discovery. `fx_list_currencies` adds retired discovery with `include_retired`, marking appended rows `retired: true`; `fx://currencies` stays current-only. Both expose `as_of`, read uncached from `/latest?base=EUR` on every call so it matches a latest market rate's `rate_date` (the currency list and metadata keep their day-long caches), and optional official ECB coverage outer bounds, never proof against interior gaps. V1 membership determines retirement, not metadata end_date. Metadata is optional, official-base-only, cached daily (a failed read retries after five minutes), bounded to one second with no retries, and never required for a successful rate call. Discovery discloses unavailable metadata. V1 reads share a 12-second deadline across retries. Market-only results identify Frankfurter v1. With the official base, explicit legacy-euro currencies use their statutory units per EUR from adoption. Fixed-only calls resolve locally, mixed calls retain the market publication date, and fully fixed series segments follow calendar days. Attribute every rate source. Mark official RON and TRY results before redenomination with the conversion factor for the old units. Currency values are trimmed and uppercased; advertised date patterns are metadata so handler-level typed date errors remain reachable. Preserve field/missing_codes/currency_windows for absent observations through every upstream_no_data rethrow; generic 404 failures carry no invented attribution. A snapped date has three causes (weekend, TARGET holiday, the day's fix not yet published), so snap wording from `src/mcp-server/tools/date-snap.ts` names all three and asserts none.
 
-`fx_get_timeseries` computes full-range observed-day summary before delivery. Count each clipped served day missing either leg once, retaining count and first/last dates in composed coverage/delivery notices; weekends, holidays and prior snapped dates never count. `limit` defaults/clamps to 500, accepts 0 for summary only, and bounds delivery after spill eligibility without affecting summary/count/bounds or full staged tables. Inline zero-limit continuation points to the first observation and requires a positive limit to advance; staged continuation stays SQL-only. Empty ranges omit summary; extrema ties use the earliest date. The arithmetic daily mean is not an accounting-policy prescription. Explicit `canvas_id` or `stage: true` (a new canvas, whose `canvas_id` the caller passes for the next series) always stages, including empty/short ranges, with `rate DOUBLE`; every registration gets a unique pair-name suffix and preserves prior tables. Unknown IDs fail `canvas_not_found`, disabled explicit staging fails `canvas_unavailable`. Preview overflow is measured before any canvas is acquired, so inline-fit series never acquire one (pending cyanheads/mcp-ts-core#501); a failed or cancelled staging call releases its newly acquired canvas, and supplied canvases remain caller-owned. `fx_dataframe_query` defaults to 150 rows and clamps over-cap positive integers to the configured canvas row cap (`CANVAS_DEFAULT_ROW_LIMIT`, 10,000 by default) with composed clamp/truncation notices.
+`fx_get_timeseries` computes full-range observed-day summary before delivery. Count each clipped served day missing either leg once and name the missing currencies with their individual coverage bounds when available; weekends, holidays and prior snapped dates never count. `limit` defaults/clamps to 500, accepts 0 for summary only, and bounds delivery after spill eligibility without affecting summary/count/bounds or full staged tables. Inline zero-limit continuation points to the first observation and requires a positive limit to advance; staged continuation stays SQL-only. Empty ranges omit summary; extrema ties use the earliest date. The arithmetic daily mean is not an accounting-policy prescription. Explicit `canvas_id` or `stage: true` (a new canvas, whose `canvas_id` the caller passes for the next series) always stages, including empty/short ranges, with `rate DOUBLE`; every registration gets a unique pair-name suffix and preserves prior tables. Unknown IDs fail `canvas_not_found`, disabled explicit staging fails `canvas_unavailable`. Preview overflow is measured before any canvas is acquired, so inline-fit series never acquire one (pending cyanheads/mcp-ts-core#501); a failed or cancelled staging call releases its newly acquired canvas, and supplied canvases remain caller-owned. `fx_dataframe_query` defaults to 150 rows and clamps over-cap positive integers to the configured canvas row cap (`CANVAS_DEFAULT_ROW_LIMIT`, 10,000 by default) with composed clamp/truncation notices.
 
 ### Tool
 
@@ -71,8 +71,8 @@ export const fxGetRate = tool('fx_get_rate', {
     rate: z.number().describe('Exchange rate: units of quote per 1 unit of base.'),
     rate_date: z.string().describe('Actual date of the rate returned.'),
     date_snapped: z.boolean().describe(DATE_SNAPPED_DESCRIPTION),
-    rate_type: z.string().describe('Always "Daily rate (Frankfurter v1)".'),
-    source: z.string().describe('Always "Frankfurter v1".'),
+    rate_type: z.string().describe('Market, statutory, or combined rate type.'),
+    source: z.string().describe('Source of the exchange rate.'),
   }),
   errors: [
     { reason: 'unsupported_currency', code: JsonRpcErrorCode.ValidationError,
@@ -114,8 +114,8 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
     base_currency: z.string().describe('The base currency code.'),
     rate_date: z.string().describe('Actual date of the rates.'),
     rates: z.record(z.string(), z.number()).describe('Map of quote currency → rate.'),
-    rate_type: z.string().describe('Always "Daily rate (Frankfurter v1)".'),
-    source: z.string().describe('Always "Frankfurter v1".'),
+    rate_type: z.string().describe('Market, statutory, or combined rate type.'),
+    source: z.string().describe('Source of the exchange rate.'),
   }),
   async handler(params, ctx) {
     const service = getFrankfurterService();
@@ -148,9 +148,9 @@ export function getServerConfig() {
 }
 ```
 
-`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`MY_API_KEY`) not the path (`apiKey`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
+`parseEnvConfig` loads `./.env` on Node and Bun and maps Zod schema paths to environment variable names. Calls in `setup()` report a `ConfigurationError` through the startup banner. The drop registration gate parses only its flag and defaults invalid values to disabled until `setup()` validates the full configuration.
 
-For env booleans use `z.stringbool()`, never `z.coerce.boolean()` — `Boolean("false")` is `true`, so a coerced flag can't be disabled through the environment. `z.stringbool()` parses `true/false/1/0/yes/no/on/off` and rejects anything else, so `=false` actually disables.
+Use `z.stringbool()` for environment booleans. It accepts `true/false`, `1/0`, `yes/no`, `on/off`, `y/n`, and `enabled/disabled`, case-insensitively. `z.coerce.boolean()` would read `"false"` as `true`.
 
 ### Server identity and instructions
 
@@ -209,7 +209,7 @@ Handlers receive a unified `ctx` object. Key properties:
 
 Handlers throw — the framework catches, classifies, and formats.
 
-**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable?, severity?, thrownBy? }]` on `tool()` / `resource()` to receive `ctx.fail(reason, …)` typed against the reason union. TypeScript catches typos at compile time, `data.reason` is auto-populated for observability, linter enforces conformance against the handler body. `recovery` is required (≥ 5 words, lint-validated) — the single source of truth for the agent's next move. The framework puts it on the wire whenever a failure carrying that `reason` arrives without a hint — a bare `ctx.fail('reason')` or a service throw with `data: { reason }` — as `data.recovery.hint`, mirrored into `content[]` text unless the message already contains it verbatim; override with an explicit `{ recovery: { hint: '...' } }` when dynamic runtime context matters. Every error envelope also carries `data.requestId`, the id the server's log records for that call carry, and `content[]` closes with `(reason … · request <id>)`. Mark an entry the service layer throws with `thrownBy: 'service'` so `error-contract-unthrown` skips it — lint-only metadata, nothing at runtime reads it. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) bubble freely and don't need declaring.
+**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable?, severity?, thrownBy? }]` on `tool()` / `resource()` to receive `ctx.fail(reason, …)` typed against the reason union. TypeScript catches typos at compile time, `data.reason` is auto-populated for observability, linter enforces conformance against the handler body. `recovery` is required (≥ 5 words, lint-validated) — the single source of truth for the agent's next move. The framework puts it on the wire whenever a failure carrying that `reason` arrives without a hint — a bare `ctx.fail('reason')` or a service throw with `data: { reason }` — as `data.recovery.hint`, mirrored into `content[]` text unless the message already contains it verbatim; override with an explicit `{ recovery: { hint: '...' } }` when dynamic runtime context matters. A declared `retryable` likewise reaches those failures as `data.retryable` unless the throw supplies its own value. Every error envelope also carries `data.requestId`, the id the server's log records for that call carry, and `content[]` closes with `(reason … · request <id>)`. Mark an entry the service layer throws with `thrownBy: 'service'` so `error-contract-unthrown` skips it — lint-only metadata, nothing at runtime reads it. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) bubble freely and don't need declaring.
 
 ```ts
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
@@ -349,8 +349,6 @@ When you complete a skill's checklist, check the boxes and add a completion time
 ---
 
 ## Commands
-
-**Dependency hold:** `@duckdb/node-api` stays on `^1.5.6-r.2` until `cyanheads/mcp-ts-core#870` is resolved. The canvas provider's `SET threads` cap does not reach DuckDB 2's `async_threads` pool, so each live canvas instance holds about 4×cores threads (about 3 on 1.5), and a process holding many canvases can reach the OS per-process thread limit.
 
 **Runtime:** Scripts use Bun's native TypeScript execution — `bun run <cmd>` is the standard invocation. `npm run <cmd>` also works (npm delegates to bun).
 

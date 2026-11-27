@@ -126,12 +126,17 @@ describe('optional currency metadata', () => {
     });
     const all = await runToolContract(fxListCurrencies, { include_retired: true });
     expect(all.structuredContent).toMatchObject({
-      count: 3,
-      currencies: [
-        { code: 'EUR', retired: false },
-        { code: 'RUB', start_date: '1999-01-04', end_date: '2022-03-01', retired: true },
-        { code: 'USD', retired: false },
-      ],
+      count: 24,
+      currencies: expect.arrayContaining([
+        expect.objectContaining({ code: 'EUR', retired: false }),
+        expect.objectContaining({
+          code: 'RUB',
+          start_date: '1999-01-04',
+          end_date: '2022-03-01',
+          retired: true,
+        }),
+        expect.objectContaining({ code: 'USD', retired: false }),
+      ]),
     });
     expect(JSON.stringify(all.content)).toContain('2022-03-01');
     expect(http.calls.filter(({ request }) => request.url.includes('/v2/'))).toHaveLength(1);
@@ -143,12 +148,14 @@ describe('optional currency metadata', () => {
       install();
       const result = await runToolContract(fxListCurrencies, input);
       const { currencies } = result.structuredContent as {
-        currencies: Array<{ code: string; retired: boolean }>;
+        currencies: Array<{ code: string; retired: boolean; adoption_date?: string }>;
       };
       const lines = (result.content[0] as { text: string }).text.split('\n');
-      expect(currencies.filter(({ retired }) => retired).map(({ code }) => code)).toEqual(
-        'include_retired' in input ? ['RUB'] : [],
-      );
+      expect(
+        currencies
+          .filter(({ retired, adoption_date }) => retired && !adoption_date)
+          .map(({ code }) => code),
+      ).toEqual('include_retired' in input ? ['RUB'] : []);
       for (const { code, retired } of currencies) {
         const line = lines.find((text) => text.startsWith(`**${code}** — `));
         expect(line?.endsWith(' · retired')).toBe(retired);
@@ -265,16 +272,16 @@ describe('optional currency metadata', () => {
     install(body);
     const result = await runToolContract(fxListCurrencies, { include_retired: true });
     expect(result.structuredContent).toMatchObject({
-      count: 2,
-      currencies: [
-        { code: 'EUR', retired: false },
-        { code: 'USD', retired: false },
-      ],
+      count: 23,
+      currencies: expect.arrayContaining([
+        expect.objectContaining({ code: 'EUR', retired: false }),
+        expect.objectContaining({ code: 'USD', retired: false }),
+      ]),
       notice: expect.stringContaining('unavailable'),
     });
     expect(JSON.stringify(result.structuredContent)).not.toContain('start_date');
     expect(JSON.stringify(result.content)).toContain('unavailable');
-    expect(JSON.stringify(result.content)).not.toContain('· retired');
+    expect(JSON.stringify(result.content)).not.toContain('**RUB**');
   });
   it('does not contact the official endpoint for a custom v1 base', async () => {
     const config = configModule.getServerConfig();
@@ -317,7 +324,7 @@ describe('optional currency metadata', () => {
     const service = getFrankfurterService();
     const retired = async () =>
       (await service.currencyDiscovery(undefined, true)).currencies
-        .filter((row) => row.retired)
+        .filter((row) => row.retired && !row.adoption_date)
         .map((row) => row.code);
     expect(await retired()).toEqual([]);
     metadataUp = true;
@@ -377,7 +384,7 @@ describe('optional currency metadata', () => {
       const service = getFrankfurterService();
       await expect(service.currencyDiscovery(caller.signal)).rejects.toBe(reason);
       expect(metadataCalls).toBe(1);
-      expect((await service.currencyDiscovery(undefined, true)).currencies).toHaveLength(3);
+      expect((await service.currencyDiscovery(undefined, true)).currencies).toHaveLength(24);
       expect(metadataCalls).toBe(2);
     },
   );
@@ -517,10 +524,10 @@ describe('optional currency metadata', () => {
     const service = getFrankfurterService();
     const cancelled = service.currencyDiscovery(caller.signal).catch((error: unknown) => error);
     await metadataStarted;
-    expect((await service.currencyDiscovery(undefined, true)).currencies).toHaveLength(3);
+    expect((await service.currencyDiscovery(undefined, true)).currencies).toHaveLength(24);
     caller.abort(reason);
     expect(await cancelled).toBe(reason);
-    expect((await service.currencyDiscovery(undefined, true)).currencies).toHaveLength(3);
+    expect((await service.currencyDiscovery(undefined, true)).currencies).toHaveLength(24);
     expect(calls).toBe(2);
   });
 });

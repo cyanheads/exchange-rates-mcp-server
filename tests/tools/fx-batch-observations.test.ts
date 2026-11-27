@@ -114,7 +114,8 @@ describe('observed FX characterization', () => {
       { date: '2024-06-03', rate: 0.5, base_currency: 'USD', quote_currency: 'GBP' },
       { date: '2024-06-07', rate: 1, base_currency: 'USD', quote_currency: 'GBP' },
     ]);
-    expect(http.calls).toHaveLength(1);
+    expect(http.calls.filter(({ request }) => request.url.includes('/v1/'))).toHaveLength(1);
+    expect(http.calls.filter(({ request }) => request.url.includes('/v2/'))).toHaveLength(1);
     const wire = await runToolContract(fxGetTimeseries, window);
     expect(wire.structuredContent).toMatchObject({
       rate_count: 2,
@@ -122,6 +123,7 @@ describe('observed FX characterization', () => {
       truncated: false,
     });
     expect(JSON.stringify(wire.content)).toContain('2024-06-03: 0.5');
+    expect(http.calls.filter(({ request }) => request.url.includes('/v2/'))).toHaveLength(1);
   });
 });
 
@@ -129,11 +131,15 @@ describe('observed FX regressions', () => {
   it('reports missing-leg served days once, excluding clipped dates, on both surfaces', async () => {
     const wire = await runToolContract(fxGetTimeseries, window);
     expect(wire.structuredContent).toMatchObject({
-      notice: expect.stringContaining('3 served publication days'),
+      notice: expect.stringContaining('Currencies missing on one or more of those days: GBP, USD.'),
     });
     const text = JSON.stringify(wire.content);
     expect(text).toContain('2024-06-04 through 2024-06-06');
     expect(text).toContain('observed days only');
+    expect(text).toContain('GBP, USD');
+    expect(text).not.toContain('coverage begins');
+    expect(text).not.toContain('coverage ends');
+    expect(text).not.toContain('bounds can contain gaps');
     expect(text).not.toContain('2024-05-31');
   });
 
@@ -231,7 +237,7 @@ describe('observed FX regressions', () => {
     expect(result.structuredContent).toMatchObject({ rates: {}, rate_count: 0, truncated: false });
     expect(result.structuredContent).not.toHaveProperty('summary');
     expect(result.structuredContent).not.toHaveProperty('next_start_date');
-    expect(JSON.stringify(result.content)).not.toContain('missing either currency leg');
+    expect(JSON.stringify(result.content)).not.toContain('Missing coverage on');
   });
 
   it('composes coverage, clamp and empty notices when no in-window legs coexist', async () => {
@@ -278,7 +284,11 @@ describe('observed FX regressions', () => {
         window.start_date,
         window.end_date,
       );
-      expect(result.missingCoverage).toEqual(count ? { count, firstDate, lastDate } : undefined);
+      expect(result.missingCoverage).toEqual(
+        count
+          ? { count, firstDate, lastDate, codes: [{ code: base, start: firstDate, end: lastDate }] }
+          : undefined,
+      );
       expect(result.rows.every((row) => row.rate === 1)).toBe(true);
     },
   );

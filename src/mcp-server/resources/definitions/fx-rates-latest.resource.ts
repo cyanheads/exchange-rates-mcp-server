@@ -37,7 +37,7 @@ export const fxRatesLatestResource = resource('fx://rates/latest/{base}', {
     const service = getFrankfurterService();
     let raw: Awaited<ReturnType<typeof service.getRates>>;
     try {
-      raw = await service.getRates(params.base, 'latest', undefined, ctx.signal);
+      raw = await service.getRates(params.base, 'latest', undefined, ctx.signal, false);
     } catch (err) {
       ctx.signal.throwIfAborted();
       const failure = failureOf(err);

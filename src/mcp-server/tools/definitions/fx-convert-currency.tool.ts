@@ -5,19 +5,40 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { DATE_SNAPPED_DESCRIPTION, dateSnapNote } from '@/mcp-server/tools/date-snap.js';
+import {
+  DATE_SNAPPED_DESCRIPTION,
+  dateSnapNote,
+  RATE_DATE_DESCRIPTION,
+} from '@/mcp-server/tools/date-snap.js';
+import {
+  fixedRateDateSchema,
+  fixedRateFields,
+  fixedRatesSchema,
+  formatFixedRates,
+  RATE_SOURCE_DESCRIPTION,
+  RATE_TYPE_DESCRIPTION,
+} from '@/mcp-server/tools/statutory-rate-output.js';
 import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
   isIsoDate,
+  supportedBeforeV1,
 } from '@/services/frankfurter/frankfurter-service.js';
+import { redenominationNotice } from '@/services/frankfurter/redenomination.js';
 import type { ResolvedRate } from '@/services/frankfurter/types.js';
 
 export const fxConvertCurrency = tool('fx_convert_currency', {
-  inputAliases: { base: 'base_currency', quote: 'quote_currency' },
+  inputAliases: {
+    base: 'base_currency',
+    quote: 'quote_currency',
+    from: 'base_currency',
+    from_currency: 'base_currency',
+    to: 'quote_currency',
+    to_currency: 'quote_currency',
+  },
   description:
-    'Convert an amount between any two currencies at the latest or a historical rate. Returns the converted amount, the rate used, the actual rate date, and whether the date was snapped to the prior published date. Cross-rates are triangulated through EUR automatically.',
+    'Convert an amount between currencies using the latest or a historical rate. Returns the converted amount, rate, effective date and provenance. Legacy euro currencies use statutory factors from their adoption date. Cross-rates are triangulated through EUR without applying an accounting rounding policy.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -45,7 +66,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
       .optional()
       .describe(
         'ISO 8601 date (YYYY-MM-DD) for a historical rate. Omit for the latest available rate. ' +
-          'Frankfurter v1 data starts 1999-01-04. Future dates are not supported.',
+          'Frankfurter v1 data starts 1999-01-04; fixed-only rates start at euro adoption. Future dates are not supported.',
       ),
   }),
   output: z.object({
@@ -55,22 +76,33 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
     quote_amount: z
       .number()
       .describe(
-        'The unrounded amount × rate product in the quote currency, using JavaScript floating-point precision; no currency minor-unit rounding policy is applied.',
+        'Unrounded conversion at JavaScript floating-point precision, without a currency minor-unit rounding policy.',
       ),
     rate: z
       .number()
       .describe('Exchange rate used: units of quote currency per 1 unit of base currency.'),
-    rate_date: z.string().describe('Actual date of the rate used for conversion.'),
+    rate_date: z.string().describe(RATE_DATE_DESCRIPTION),
     date_snapped: z.boolean().describe(DATE_SNAPPED_DESCRIPTION),
-    rate_type: z
-      .string()
-      .describe(
-        'Always "Daily rate (Frankfurter v1)" — these are reference rates, not tradeable bid/ask.',
-      ),
-    source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
+    rate_type: z.string().describe(RATE_TYPE_DESCRIPTION),
+    source: z.string().describe(RATE_SOURCE_DESCRIPTION),
+    fixed_rates: fixedRatesSchema,
+    fixed_rate_date: fixedRateDateSchema,
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe('Discloses restated units for historical RON or TRY rates.'),
+  },
+
   errors: [
+    {
+      reason: 'amount_out_of_range',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'amount is too large to produce a finite value at the resolved rate.',
+      recovery: 'Pass a smaller amount for this currency pair.',
+    },
     {
       reason: 'invalid_date_format',
       code: JsonRpcErrorCode.ValidationError,
@@ -86,7 +118,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
     {
       reason: 'date_out_of_range',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'date is before 1999-01-04 or in the future.',
+      when: 'date is in the future or precedes 1999-01-04 without an applicable fixed-only rate.',
       recovery: 'Frankfurter v1 data starts 1999-01-04; omit date for the latest available rate.',
     },
     {
@@ -111,7 +143,10 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
           { field: 'date' },
         );
       }
-      if (date < ECB_START_DATE) {
+      if (
+        date < ECB_START_DATE &&
+        !supportedBeforeV1(date, input.base_currency, [input.quote_currency])
+      ) {
         throw ctx.fail(
           'date_out_of_range',
           `Date ${date} is before Frankfurter v1 data start ${ECB_START_DATE}.`,
@@ -149,7 +184,29 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
       throw err;
     }
 
-    const quoteAmount = input.amount * resolved.rate;
+    let quoteAmount = input.amount * resolved.rate;
+    if (resolved.legs && resolved.baseCurrency !== resolved.quoteCurrency) {
+      const amountInEur = input.amount / resolved.legs.base;
+      // Preserve the cross-rate product when the EUR intermediate overflows or underflows.
+      if (Number.isFinite(amountInEur) && amountInEur > 0) {
+        quoteAmount = amountInEur * resolved.legs.quote;
+      }
+    }
+    if (!Number.isFinite(quoteAmount)) {
+      throw ctx.fail(
+        'amount_out_of_range',
+        'The converted amount exceeds the numeric range. Pass a smaller amount.',
+        {
+          field: 'amount',
+        },
+      );
+    }
+
+    const notice = redenominationNotice(resolved.rateDate, [
+      resolved.baseCurrency,
+      resolved.quoteCurrency,
+    ]);
+    if (notice) ctx.enrich.notice(notice);
 
     ctx.log.info('Converted currency', {
       base: resolved.baseCurrency,
@@ -171,6 +228,7 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
       date_snapped: resolved.dateSnapped,
       rate_type: resolved.rateType,
       source: resolved.source,
+      ...fixedRateFields(resolved.statutory, resolved.rateDate),
     };
   },
 
@@ -183,7 +241,8 @@ export const fxConvertCurrency = tool('fx_convert_currency', {
           `**${result.base_amount} ${result.base_currency}** = **${result.quote_amount} ${result.quote_currency}**\n` +
           `Rate: ${result.rate} (${result.quote_currency} per ${result.base_currency}) · ${result.rate_date}` +
           snapNote +
-          `\n*${result.rate_type} · ${result.source}*`,
+          `\n*${result.rate_type} · ${result.source}*` +
+          formatFixedRates(result.fixed_rates, result.fixed_rate_date),
       },
     ];
   },

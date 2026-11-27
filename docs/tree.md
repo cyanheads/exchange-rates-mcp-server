@@ -1,6 +1,6 @@
 # exchange-rates-mcp-server - Directory Structure
 
-Generated on: 2026-11-16 09:40:42
+Generated on: 2026-11-27 18:48:29
 
 ```text
 exchange-rates-mcp-server/
@@ -168,7 +168,8 @@ exchange-rates-mcp-server/
 │   │       │   ├── fx-get-timeseries.tool.ts
 │   │       │   ├── fx-list-currencies.tool.ts
 │   │       │   └── index.ts
-│   │       └── date-snap.ts
+│   │       ├── date-snap.ts
+│   │       └── statutory-rate-output.ts
 │   ├── services/
 │   │   ├── canvas/
 │   │   │   └── canvas-accessor.ts
@@ -176,6 +177,8 @@ exchange-rates-mcp-server/
 │   │       ├── currency-metadata.ts
 │   │       ├── errors.ts
 │   │       ├── frankfurter-service.ts
+│   │       ├── redenomination.ts
+│   │       ├── statutory-euro-rates.ts
 │   │       └── types.ts
 │   ├── utils/
 │   │   └── escape-markdown-table-cell.ts
@@ -206,8 +209,10 @@ exchange-rates-mcp-server/
 │   │   ├── fx-get-rates.tool.test.ts
 │   │   ├── fx-get-timeseries.canvas.test.ts
 │   │   ├── fx-get-timeseries.tool.test.ts
+│   │   ├── fx-historical-notices.test.ts
 │   │   ├── fx-list-currencies.tool.test.ts
 │   │   ├── fx-recovery-hints.test.ts
+│   │   ├── fx-statutory-rates.test.ts
 │   │   ├── fx-tool-annotations.test.ts
 │   │   ├── fx-tool-contracts.test.ts
 │   │   └── strict-inputs.test.ts

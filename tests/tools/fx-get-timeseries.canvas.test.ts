@@ -64,6 +64,42 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
     await canvas.shutdown(createMockContext());
   });
 
+  it('stages all rows and composes unit guidance with coverage and delivery notices', async () => {
+    getTimeSeries.mockResolvedValueOnce({
+      rows: [
+        { date: '2005-06-29', rate: 3.63, base_currency: 'EUR', quote_currency: 'RON' },
+        { date: '2005-07-01', rate: 3.603, base_currency: 'EUR', quote_currency: 'RON' },
+      ],
+      startDate: '2005-06-29',
+      endDate: '2005-07-01',
+      missingCoverage: {
+        count: 1,
+        firstDate: '2005-06-30',
+        lastDate: '2005-06-30',
+        codes: [{ code: 'RON', start: '2005-06-30', end: '2005-06-30' }],
+      },
+    });
+    const result = await runToolContract(
+      fxGetTimeseries,
+      {
+        base_currency: 'EUR',
+        quote_currency: 'RON',
+        start_date: '2005-06-29',
+        end_date: '2005-07-01',
+        limit: 0,
+        stage: true,
+      },
+      { context: { tenantId: 'historical-units' } },
+    );
+    expect(result.structuredContent).toMatchObject({ spilled: true, rates: {}, rate_count: 2 });
+    for (const surface of [result.structuredContent, result.content]) {
+      const text = JSON.stringify(surface);
+      expect(text).toContain('1 RON = 10,000 ROL');
+      expect(text).toContain('1 served publication day on 2005-06-30');
+      expect(text).toContain('Staged 2 rows');
+    }
+  });
+
   it.each([
     { supplied: false, limit: 0 },
     { supplied: false, limit: 1 },
@@ -81,7 +117,12 @@ describe('fx_get_timeseries on a DuckDB canvas', () => {
         rows,
         startDate,
         endDate,
-        missingCoverage: { count: 3, firstDate: '2020-01-02', lastDate: '2020-01-04' },
+        missingCoverage: {
+          count: 3,
+          firstDate: '2020-01-02',
+          lastDate: '2020-01-04',
+          codes: [{ code: 'USD', start: '2020-01-02', end: '2020-01-04' }],
+        },
       });
       const result = await runToolContract(
         fxGetTimeseries,

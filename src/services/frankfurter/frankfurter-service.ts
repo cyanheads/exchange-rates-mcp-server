@@ -6,14 +6,22 @@
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { serializationError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
-import { getServerConfig } from '@/config/server-config.js';
+import { getServerConfig, OFFICIAL_FRANKFURTER_BASE_URL } from '@/config/server-config.js';
 import { fetchCurrencyMetadata } from './currency-metadata.js';
 import {
   type CoverageContext,
+  failureOf,
   invalidDateFormat,
   unsupportedCurrency,
   upstreamNoData,
 } from './errors.js';
+import {
+  MARKET_PROVENANCE,
+  type StatutoryRate,
+  statutoryEuroRates,
+  statutoryProvenance,
+  statutoryRate,
+} from './statutory-euro-rates.js';
 import type {
   CoverageWindow,
   Currency,
@@ -22,12 +30,14 @@ import type {
   FrankfurterRateResponse,
   FrankfurterSeriesResponse,
   ResolvedRate,
+  ResolvedSnapshot,
   SeriesRow,
   TimeSeriesResult,
 } from './types.js';
 
 /** Frankfurter v1 data start date. Requests before this return 404 from Frankfurter. */
 const ECB_START_DATE = '1999-01-04';
+const MS_PER_DAY = 86_400_000;
 
 /** YYYY-MM-DD shape guard — calendar validity is checked separately in {@link isIsoDate}. */
 const DATE_FORMAT_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -55,6 +65,47 @@ export function isIsoDate(value: string): boolean {
 /** Boundary guard for date inputs. Throws `invalid_date_format` naming the field at fault. */
 function assertDateFormat(date: string, field: string): void {
   if (!isIsoDate(date)) throw invalidDateFormat(field, date);
+}
+
+function fixedRatesFor(codes: string[], date: string, enabled: boolean) {
+  const factors = new Map<string, StatutoryRate>();
+  if (enabled) {
+    for (const code of new Set(codes)) {
+      const factor = statutoryRate(code, date);
+      if (factor) factors.set(code, factor);
+    }
+  }
+  return factors;
+}
+
+function fixedOnly(codes: string[], factors: ReadonlyMap<string, StatutoryRate>): boolean {
+  return factors.size > 0 && codes.every((code) => code === 'EUR' || factors.has(code));
+}
+
+/** The v1 epoch only limits requests requiring a v1 observation. */
+export function supportedBeforeV1(date: string, base: string, quotes: string[]): boolean {
+  if (quotes.length === 0) return false;
+  const codes = [base, ...quotes].map((code) => code.trim().toUpperCase());
+  return fixedOnly(
+    codes,
+    fixedRatesFor(
+      codes,
+      date,
+      getServerConfig().frankfurterBaseUrl === OFFICIAL_FRANKFURTER_BASE_URL,
+    ),
+  );
+}
+
+function eurLeg(
+  code: string,
+  rates: FrankfurterRateResponse['rates'],
+  fixed: ReadonlyMap<string, StatutoryRate>,
+) {
+  return code === 'EUR' ? 1 : (fixed.get(code)?.units_per_eur ?? rates[code]);
+}
+
+function dateOffset(date: string, days: number): string {
+  return new Date(Date.parse(date) + days * MS_PER_DAY).toISOString().slice(0, 10);
 }
 
 let _service: FrankfurterService | undefined;
@@ -120,10 +171,21 @@ class FrankfurterService {
         retired: false,
       };
     });
-    if (includeRetired && metadata) {
+    if (includeRetired) {
       const currentCodes = new Set(current.map((currency) => currency.code));
-      for (const currency of metadata) {
+      for (const currency of metadata ?? []) {
         if (!currentCodes.has(currency.code)) currencies.push({ ...currency, retired: true });
+      }
+      if (this.baseUrl === OFFICIAL_FRANKFURTER_BASE_URL) {
+        const byCode = new Map(currencies.map((currency) => [currency.code, currency]));
+        for (const { code, name, adoption_date, units_per_eur } of statutoryEuroRates.values()) {
+          const currency = byCode.get(code);
+          if (currency) {
+            Object.assign(currency, { adoption_date, units_per_eur });
+          } else {
+            currencies.push({ code, name, retired: true, adoption_date, units_per_eur });
+          }
+        }
       }
       currencies.sort((a, b) => a.code.localeCompare(b.code));
     }
@@ -133,7 +195,9 @@ class FrankfurterService {
       as_of,
       ...(unavailable && {
         notice:
-          'Optional official ECB coverage metadata is unavailable; current v1 discovery is preserved, but coverage dates and additional retired currencies cannot be supplied.',
+          includeRetired && this.baseUrl === OFFICIAL_FRANKFURTER_BASE_URL
+            ? 'Optional official ECB coverage metadata is unavailable; current v1 discovery and statutory euro rates are preserved, but coverage dates and other retired currencies cannot be supplied.'
+            : 'Optional official ECB coverage metadata is unavailable; current v1 discovery is preserved, but coverage dates and additional retired currencies cannot be supplied.',
       }),
     };
   }
@@ -141,7 +205,7 @@ class FrankfurterService {
   /** Never query official metadata for a custom v1 source, nor share a caller's cancellation. */
   private async currencyMetadata(signal?: AbortSignal): Promise<CoverageWindow[] | undefined> {
     signal?.throwIfAborted();
-    if (this.baseUrl !== 'https://api.frankfurter.dev/v1') return;
+    if (this.baseUrl !== OFFICIAL_FRANKFURTER_BASE_URL) return;
     const cached = this.metadataCache;
     const ttlMs = cached?.currencies ? CURRENCY_CACHE_TTL_MS : METADATA_FAILURE_TTL_MS;
     if (cached && Date.now() - cached.fetchedAt <= ttlMs)
@@ -249,26 +313,16 @@ class FrankfurterService {
   ): Promise<ResolvedRate> {
     const upper_base = base.trim().toUpperCase();
     const upper_quote = quote.trim().toUpperCase();
-    if (date !== 'latest') assertDateFormat(date, 'date');
-    if (date === 'latest') {
-      await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
-      await this.assertSupportedCurrencies('quote_currency', [upper_quote], signal);
-    }
-    const endpoint = date === 'latest' ? '/latest' : `/${encodeURIComponent(date)}`;
-    const raw = await this.fetchJson<FrankfurterRateResponse>(`${endpoint}?base=EUR`, signal);
-    if (date !== 'latest') {
-      await this.assertHistoricalCurrencies(
-        [
-          ['base_currency', [upper_base]],
-          ['quote_currency', [upper_quote]],
-        ],
-        new Set(['EUR', ...Object.keys(raw.rates)]),
-        { start: date, end: date },
-        signal,
-      );
-    }
-    const baseLeg = upper_base === 'EUR' ? 1 : raw.rates[upper_base];
-    const quoteLeg = upper_quote === 'EUR' ? 1 : raw.rates[upper_quote];
+    const { raw, fixed, statutory } = await this.resolveSnapshot(
+      upper_base,
+      [upper_quote],
+      'quote_currency',
+      date,
+      signal,
+      true,
+    );
+    const baseLeg = eurLeg(upper_base, raw.rates, fixed);
+    const quoteLeg = eurLeg(upper_quote, raw.rates, fixed);
     if (baseLeg === undefined) throw upstreamNoData('base_currency', [upper_base]);
     if (quoteLeg === undefined) throw upstreamNoData('quote_currency', [upper_quote]);
     const rate = quoteLeg / baseLeg;
@@ -281,8 +335,13 @@ class FrankfurterService {
       rate,
       rateDate: raw.date,
       dateSnapped,
-      rateType: 'Daily rate (Frankfurter v1)',
-      source: 'Frankfurter v1',
+      ...(statutory
+        ? {
+            ...statutoryProvenance(statutory.market),
+            statutory,
+            legs: { base: baseLeg, quote: quoteLeg },
+          }
+        : MARKET_PROVENANCE),
     };
   }
 
@@ -300,39 +359,30 @@ class FrankfurterService {
     date: string,
     symbols?: string[],
     signal?: AbortSignal,
-  ): Promise<FrankfurterRateResponse> {
+    /** The current-only latest-rates resource shares this market snapshot path. */
+    includeFixed = true,
+  ): Promise<ResolvedSnapshot> {
     const upper_base = base.trim().toUpperCase();
     const upper_symbols = symbols?.map((s) => s.trim().toUpperCase()) ?? [];
-    if (date !== 'latest') assertDateFormat(date, 'date');
-    if (date === 'latest') {
-      await this.assertSupportedCurrencies('base_currency', [upper_base], signal);
-      if (upper_symbols.length > 0)
-        await this.assertSupportedCurrencies('symbols', upper_symbols, signal);
-    }
-    const endpoint = date === 'latest' ? '/latest' : `/${encodeURIComponent(date)}`;
-    const raw = await this.fetchJson<FrankfurterRateResponse>(`${endpoint}?base=EUR`, signal);
-    if (date !== 'latest') {
-      await this.assertHistoricalCurrencies(
-        [
-          ['base_currency', [upper_base]],
-          ['symbols', upper_symbols],
-        ],
-        new Set(['EUR', ...Object.keys(raw.rates)]),
-        { start: date, end: date },
-        signal,
-      );
-    }
-    const baseLeg = upper_base === 'EUR' ? 1 : raw.rates[upper_base];
+    const { raw, fixed, statutory } = await this.resolveSnapshot(
+      upper_base,
+      upper_symbols,
+      'symbols',
+      date,
+      signal,
+      includeFixed,
+    );
+    const baseLeg = eurLeg(upper_base, raw.rates, fixed);
     if (baseLeg === undefined) throw upstreamNoData('base_currency', [upper_base]);
     const requested =
       upper_symbols.length > 0
         ? upper_symbols
         : ['EUR', ...Object.keys(raw.rates)].filter((code) => code !== upper_base);
     const rates = Object.create(null) as Record<string, number>;
-    const missing = requested.filter((code) => code !== 'EUR' && raw.rates[code] === undefined);
+    const missing = requested.filter((code) => eurLeg(code, raw.rates, fixed) === undefined);
     if (missing.length > 0) throw upstreamNoData('symbols', missing);
     for (const code of requested) {
-      const leg = code === 'EUR' ? 1 : raw.rates[code];
+      const leg = eurLeg(code, raw.rates, fixed);
       if (leg === undefined) throw upstreamNoData('symbols', [code]);
       rates[code] = leg / baseLeg;
     }
@@ -340,7 +390,55 @@ class FrankfurterService {
       ...raw,
       base: upper_base,
       rates,
+      ...(statutory && { statutory }),
     };
+  }
+
+  /** Supply both point and bulk calculations with the same snapshot and active fixed factors. */
+  private async resolveSnapshot(
+    base: string,
+    quotes: string[],
+    quoteField: 'quote_currency' | 'symbols',
+    date: string,
+    signal: AbortSignal | undefined,
+    includeFixed: boolean,
+  ) {
+    signal?.throwIfAborted();
+    if (date !== 'latest') assertDateFormat(date, 'date');
+    const effectiveDate = date === 'latest' ? new Date().toISOString().slice(0, 10) : date;
+    const codes = [base, ...quotes];
+    const fixed = fixedRatesFor(
+      codes,
+      effectiveDate,
+      includeFixed && this.baseUrl === OFFICIAL_FRANKFURTER_BASE_URL,
+    );
+    const market = quotes.length === 0 || !fixedOnly(codes, fixed);
+    const statutory =
+      fixed.size > 0 ? { fixedRates: [...fixed.values()], market, date: effectiveDate } : undefined;
+    if (!market) {
+      return { raw: { amount: 1, base: 'EUR', date: effectiveDate, rates: {} }, fixed, statutory };
+    }
+
+    if (date === 'latest') {
+      if (!fixed.has(base)) await this.assertSupportedCurrencies('base_currency', [base], signal);
+      const marketQuotes = quotes.filter((code) => !fixed.has(code));
+      if (marketQuotes.length > 0)
+        await this.assertSupportedCurrencies(quoteField, marketQuotes, signal);
+    }
+    const endpoint = date === 'latest' ? '/latest' : `/${encodeURIComponent(date)}`;
+    const raw = await this.fetchJson<FrankfurterRateResponse>(`${endpoint}?base=EUR`, signal);
+    if (date !== 'latest') {
+      await this.assertHistoricalCurrencies(
+        [
+          ['base_currency', [base]],
+          [quoteField, quotes],
+        ],
+        new Set(['EUR', ...Object.keys(raw.rates), ...fixed.keys()]),
+        { start: date, end: date },
+        signal,
+      );
+    }
+    return { raw, fixed, statutory };
   }
 
   // ── Time-series ─────────────────────────────────────────────────────────────
@@ -368,60 +466,129 @@ class FrankfurterService {
   ): Promise<TimeSeriesResult> {
     const upper_base = base.trim().toUpperCase();
     const upper_quote = quote.trim().toUpperCase();
+    signal?.throwIfAborted();
     assertDateFormat(startDate, 'start_date');
     assertDateFormat(endDate, 'end_date');
-    const url = `/${encodeURIComponent(startDate)}..${encodeURIComponent(endDate)}?base=EUR`;
-    const raw = await this.fetchJson<FrankfurterSeriesResponse>(url, signal);
-    const available = new Set<string>();
-    for (const rates of Object.values(raw.rates)) {
-      available.add('EUR');
-      for (const code of Object.keys(rates)) available.add(code);
+    const codes = [upper_base, upper_quote];
+    const enabled = this.baseUrl === OFFICIAL_FRANKFURTER_BASE_URL;
+    const endFactors = fixedRatesFor(codes, endDate, enabled);
+    const fixedBaseLeg = eurLeg(upper_base, {}, endFactors);
+    const fixedQuoteLeg = eurLeg(upper_quote, {}, endFactors);
+    const lastAdoption = [...endFactors.values()]
+      .map((rate) => rate.adoption_date)
+      .sort()
+      .at(-1);
+    const fixedSuffix =
+      lastAdoption && fixedBaseLeg !== undefined && fixedQuoteLeg !== undefined
+        ? { startDate: lastAdoption, rate: fixedQuoteLeg / fixedBaseLeg }
+        : undefined;
+    const marketEnd = fixedSuffix ? dateOffset(fixedSuffix.startDate, -1) : endDate;
+    let marketRates: FrankfurterSeriesResponse['rates'] = {};
+
+    if (startDate <= marketEnd) {
+      const url = `/${encodeURIComponent(startDate)}..${encodeURIComponent(marketEnd)}?base=EUR`;
+      try {
+        marketRates = (await this.fetchJson<FrankfurterSeriesResponse>(url, signal)).rates;
+      } catch (error) {
+        signal?.throwIfAborted();
+        /** A v1 404 for the market prefix still leaves a valid statutory suffix. */
+        if (!fixedSuffix || failureOf(error)?.reason !== 'upstream_no_data') throw error;
+      }
+      const available = new Set<string>(endFactors.keys());
+      for (const rates of Object.values(marketRates)) {
+        available.add('EUR');
+        for (const code of Object.keys(rates)) available.add(code);
+      }
+      if (fixedSuffix) available.add('EUR');
+      await this.assertHistoricalCurrencies(
+        [
+          ['base_currency', [upper_base]],
+          ['quote_currency', [upper_quote]],
+        ],
+        available,
+        { start: startDate, end: endDate },
+        signal,
+      );
     }
-    await this.assertHistoricalCurrencies(
-      [
-        ['base_currency', [upper_base]],
-        ['quote_currency', [upper_quote]],
-      ],
-      available,
-      { start: startDate, end: endDate },
-      signal,
-    );
 
-    let missingCoverage: TimeSeriesResult['missingCoverage'];
-    const rows: SeriesRow[] = Object.entries(raw.rates)
-      .filter(([date]) => date >= startDate && date <= endDate)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .flatMap(([date, rateMap]) => {
-        /**
-         * A day the quoted currency is missing from is not a publication day for
-         * this pair — dropping it is the only honest option, since any stand-in
-         * number would read as a real Frankfurter v1 rate downstream.
-         */
-        const baseLeg = upper_base === 'EUR' ? 1 : rateMap[upper_base];
-        const quoteLeg = upper_quote === 'EUR' ? 1 : rateMap[upper_quote];
-        if (baseLeg === undefined || quoteLeg === undefined) {
-          missingCoverage = {
-            count: (missingCoverage?.count ?? 0) + 1,
-            firstDate: missingCoverage?.firstDate ?? date,
-            lastDate: date,
-          };
-          return [];
-        }
-        return [
-          {
-            date,
-            rate: quoteLeg / baseLeg,
-            base_currency: upper_base,
-            quote_currency: upper_quote,
-          },
-        ];
+    let missing: Omit<NonNullable<TimeSeriesResult['missingCoverage']>, 'codes'> | undefined;
+    const missingByCode = new Map<string, CoverageContext['requested']>();
+    const trackMissing = (code: string, date: string) => {
+      const span = missingByCode.get(code);
+      if (span) span.end = date;
+      else missingByCode.set(code, { start: date, end: date });
+    };
+    const usedFactors = new Map<string, StatutoryRate>();
+    const rows: SeriesRow[] = [];
+    let usedMarket = false;
+    const append = (
+      date: string,
+      rate: number,
+      fixed: ReadonlyMap<string, StatutoryRate>,
+      market: boolean,
+    ) => {
+      if (market) usedMarket = true;
+      for (const [code, factor] of fixed) usedFactors.set(code, factor);
+      rows.push({
+        date,
+        rate,
+        base_currency: upper_base,
+        quote_currency: upper_quote,
+        ...(fixed.size > 0 && { source: statutoryProvenance(market).source }),
       });
+    };
 
+    for (const [date, rateMap] of Object.entries(marketRates).sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      if (date < startDate || date > marketEnd) continue;
+      const fixed = fixedRatesFor(codes, date, enabled);
+      const baseLeg = eurLeg(upper_base, rateMap, fixed);
+      const quoteLeg = eurLeg(upper_quote, rateMap, fixed);
+      if (baseLeg === undefined || quoteLeg === undefined) {
+        missing ??= { count: 0, firstDate: date, lastDate: date };
+        missing.count += 1;
+        missing.lastDate = date;
+        if (baseLeg === undefined) trackMissing(upper_base, date);
+        if (quoteLeg === undefined && upper_quote !== upper_base) trackMissing(upper_quote, date);
+        continue;
+      }
+      append(date, quoteLeg / baseLeg, fixed, true);
+    }
+
+    if (fixedSuffix) {
+      for (
+        let date = startDate < fixedSuffix.startDate ? fixedSuffix.startDate : startDate;
+        date <= endDate;
+        date = dateOffset(date, 1)
+      ) {
+        append(date, fixedSuffix.rate, endFactors, false);
+      }
+    }
+
+    if (usedFactors.size > 0) {
+      for (const row of rows) row.source ??= MARKET_PROVENANCE.source;
+    }
+
+    const metadata = missing ? await this.currencyMetadata(signal) : undefined;
     return {
       rows,
-      ...(missingCoverage && { missingCoverage }),
+      ...(missing && {
+        missingCoverage: {
+          ...missing,
+          codes: [...missingByCode]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([code, span]) => {
+              const window = metadata?.find((currency) => currency.code === code);
+              return { code, ...span, ...(window && { window }) };
+            }),
+        },
+      }),
       startDate: rows[0]?.date ?? startDate,
       endDate: rows.at(-1)?.date ?? endDate,
+      ...(usedFactors.size > 0 && {
+        statutory: { fixedRates: [...usedFactors.values()], market: usedMarket },
+      }),
     };
   }
 

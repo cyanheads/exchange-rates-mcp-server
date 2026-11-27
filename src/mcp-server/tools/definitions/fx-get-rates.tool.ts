@@ -5,19 +5,37 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { DATE_SNAPPED_DESCRIPTION, dateSnapNote } from '@/mcp-server/tools/date-snap.js';
+import {
+  DATE_SNAPPED_DESCRIPTION,
+  dateSnapNote,
+  RATE_DATE_DESCRIPTION,
+} from '@/mcp-server/tools/date-snap.js';
+import {
+  fixedRateDateSchema,
+  fixedRateFields,
+  fixedRatesSchema,
+  formatFixedRates,
+  RATE_SOURCE_DESCRIPTION,
+  RATE_TYPE_DESCRIPTION,
+} from '@/mcp-server/tools/statutory-rate-output.js';
 import { failureOf, unsupportedCurrencyCodesOf } from '@/services/frankfurter/errors.js';
 import {
   ECB_START_DATE,
   getFrankfurterService,
   isIsoDate,
+  supportedBeforeV1,
 } from '@/services/frankfurter/frankfurter-service.js';
-import type { FrankfurterRateResponse } from '@/services/frankfurter/types.js';
+import { redenominationNotice } from '@/services/frankfurter/redenomination.js';
+import {
+  MARKET_PROVENANCE,
+  statutoryProvenance,
+} from '@/services/frankfurter/statutory-euro-rates.js';
+import type { ResolvedSnapshot } from '@/services/frankfurter/types.js';
 
 export const fxGetRates = tool('fx_get_rates', {
   inputAliases: { base: 'base_currency' },
   description:
-    'Get all available exchange rates for one base currency in a single snapshot. Useful for bulk comparison and seeding downstream tools. Returns a map of quote currency → rate, the actual snapshot date, and whether a historical date was snapped to the prior published date. Optionally filter to a subset of quote currencies via symbols. Listing the base currency itself in symbols is accepted and returns a rate of 1 for it.',
+    'Get exchange rates for one base currency in a single snapshot, with provenance and the actual rate date. Omit symbols for the market snapshot’s available quote codes. Explicit legacy bases and symbols use statutory factors from euro adoption. Listing the base in symbols returns a rate of 1 for it.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -35,7 +53,7 @@ export const fxGetRates = tool('fx_get_rates', {
       .optional()
       .describe(
         'ISO 8601 date (YYYY-MM-DD). Omit for the latest available rate. ' +
-          'Frankfurter v1 data starts 1999-01-04. Future dates are not supported.',
+          'Frankfurter v1 data starts 1999-01-04; fixed-only rates start at euro adoption. Future dates are not supported.',
       ),
     symbols: z
       .array(z.string().describe('ISO 4217 currency code to include in the response.'))
@@ -50,22 +68,23 @@ export const fxGetRates = tool('fx_get_rates', {
   }),
   output: z.object({
     base_currency: z.string().describe('The base currency code.'),
-    rate_date: z
-      .string()
-      .describe(
-        'Actual date of the rates: the prior published date when none was published for the requested date.',
-      ),
+    rate_date: z.string().describe(RATE_DATE_DESCRIPTION),
     rates: z
       .record(z.string(), z.number())
       .describe('Map of quote currency code → exchange rate (units of quote per 1 base).'),
     date_snapped: z.boolean().describe(DATE_SNAPPED_DESCRIPTION),
-    rate_type: z
-      .string()
-      .describe(
-        'Always "Daily rate (Frankfurter v1)" — these are reference rates, not tradeable bid/ask.',
-      ),
-    source: z.string().describe('Always "Frankfurter v1" — the upstream data provider.'),
+    rate_type: z.string().describe(RATE_TYPE_DESCRIPTION),
+    source: z.string().describe(RATE_SOURCE_DESCRIPTION),
+    fixed_rates: fixedRatesSchema,
+    fixed_rate_date: fixedRateDateSchema,
   }),
+
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe('Discloses restated units for historical RON or TRY rates.'),
+  },
 
   errors: [
     {
@@ -83,7 +102,7 @@ export const fxGetRates = tool('fx_get_rates', {
     {
       reason: 'date_out_of_range',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'date is before 1999-01-04 or in the future.',
+      when: 'date is in the future or precedes 1999-01-04 without an applicable fixed-only rate.',
       recovery: 'Frankfurter v1 data starts 1999-01-04; omit date for the latest available rate.',
     },
     {
@@ -108,7 +127,10 @@ export const fxGetRates = tool('fx_get_rates', {
           { field: 'date' },
         );
       }
-      if (date < ECB_START_DATE) {
+      if (
+        date < ECB_START_DATE &&
+        !supportedBeforeV1(date, input.base_currency, input.symbols ?? [])
+      ) {
         throw ctx.fail(
           'date_out_of_range',
           `Date ${date} is before Frankfurter v1 data start ${ECB_START_DATE}.`,
@@ -120,7 +142,7 @@ export const fxGetRates = tool('fx_get_rates', {
       }
     }
 
-    let raw: FrankfurterRateResponse;
+    let raw: ResolvedSnapshot;
     try {
       raw = await service.getRates(input.base_currency, date, input.symbols, ctx.signal);
     } catch (err) {
@@ -147,19 +169,26 @@ export const fxGetRates = tool('fx_get_rates', {
       throw err;
     }
 
+    const notice = redenominationNotice(raw.date, [raw.base, ...Object.keys(raw.rates)]);
+    if (notice) ctx.enrich.notice(notice);
+
     ctx.log.info('Fetched rates snapshot', {
       base: input.base_currency,
       date: raw.date,
       count: Object.keys(raw.rates).length,
     });
 
+    const provenance = raw.statutory
+      ? statutoryProvenance(raw.statutory.market)
+      : MARKET_PROVENANCE;
     return {
       base_currency: raw.base,
       rate_date: raw.date,
       rates: raw.rates,
       date_snapped: date !== 'latest' && raw.date !== date,
-      rate_type: 'Daily rate (Frankfurter v1)',
-      source: 'Frankfurter v1',
+      rate_type: provenance.rateType,
+      source: provenance.source,
+      ...fixedRateFields(raw.statutory, raw.date),
     };
   },
 
@@ -174,7 +203,9 @@ export const fxGetRates = tool('fx_get_rates', {
         text:
           `**${result.base_currency} exchange rates** — ${result.rate_date}` +
           snapNote +
-          `\n*${result.rate_type} · ${result.source}*\n\n` +
+          `\n*${result.rate_type} · ${result.source}*` +
+          formatFixedRates(result.fixed_rates, result.fixed_rate_date) +
+          '\n\n' +
           rateLines.join('\n'),
       },
     ];

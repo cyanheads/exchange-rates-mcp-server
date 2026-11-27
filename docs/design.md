@@ -10,34 +10,35 @@
 | `fx_get_rate` | Get the exchange rate for a currency pair on a date (default: latest). Returns the rate, the actual rate date (may differ from the requested date when it was a weekend, a holiday, or a day whose fix is not yet published), and source provenance. Use when the agent wants the rate number without doing a conversion. | `base_currency`, `quote_currency`, `date?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `fx_get_timeseries` | Inclusive daily series with full observed-range summary and missing-leg coverage notices. Preview limit defaults/clamps to 500; 0 returns summary only. Continue inline with next_start_date and a positive limit. Long ranges stage independently of limit; explicit canvas_id or stage: true always stages complete rows. Every table has a unique suffix and retains prior registrations. | `base_currency`, `quote_currency`, `start_date`, `end_date`, `canvas_id?`, `stage?`, `limit?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `fx_get_rates` | All available rates for one base currency in a single snapshot (default: latest). Useful for bulk comparison and seeding downstream tools. Returns a map of quote currency → rate, the actual snapshot date, and `date_snapped`. `symbols`, when sent, must be non-empty. | `base_currency`, `date?`, `symbols?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
-| `fx_list_currencies` | Current discovery with names, count, source, as_of and optional official coverage outer bounds. include_retired adds metadata codes absent from the current v1 set, each marked `retired: true`. Historical availability is checked against v1 responses. as_of is read uncached on every call; the currency list and metadata are cached daily; metadata failure is disclosed without failing discovery. | `include_retired?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
+| `fx_list_currencies` | Current discovery with names, count, source, as_of and optional official coverage outer bounds. include_retired adds historical market codes and all statutory euro predecessors on the official configuration. Appended codes carry `retired: true`. as_of is read uncached on every call; the currency list and metadata are cached daily; metadata failure is disclosed without failing discovery. | `include_retired?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true` |
 | `fx_dataframe_describe` | List DataCanvas tables and columns from a prior `fx_get_timeseries` call that returned a `canvas_id`. Required first step before `fx_dataframe_query`. | `canvas_id` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 | `fx_dataframe_query` | Run a SQL SELECT against a DataCanvas table produced by `fx_get_timeseries`. Supports aggregations, GROUP BY, and JOINs across multiple registered tables. Returns at most `row_limit` rows (default 150, max the configured canvas row cap, 10,000 by default) on both surfaces; a truncated result carries a `notice` with the `ORDER BY … LIMIT … OFFSET …` paging shape. Markdown table cells are escaped. | `canvas_id`, `query`, `row_limit?` | `readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 | `fx_dataframe_drop` | Permanently remove one staged table or view from a DataCanvas. Deletes staged analytical data only; upstream rate data is untouched and the series can be re-staged. Opt-in via `FX_ENABLE_CANVAS_DROP`; registered with `disabledTool()` while the flag is off. | `canvas_id`, `table_name` | `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: false` |
 
 ### Error Contracts
 
-`base` aliases `base_currency` on all four currency-input tools; `quote` aliases `quote_currency` on the three pair tools. Definition-level `inputAliases` preserves values and canonical advertised schemas. The framework rejects alias/canonical collisions instead of choosing a value.
+`base` and `quote` identify the currency pair. `fx_get_rate` and `fx_convert_currency` also accept `from` and `to`. All three pair tools accept `from_currency` and `to_currency`. `symbol` identifies the single quote on the rate and series tools. These aliases preserve values and canonical schemas. Duplicate spellings are rejected.
 
 Domain failures to declare as `errors: [{ reason, code, when }]` on each tool. Baseline errors (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`) bubble automatically and are not listed.
 
 | Tool | `reason` | Code | When |
 |:-----|:---------|:-----|:-----|
 | `fx_convert_currency` | `invalid_date_format` | `ValidationError` | `date` is not a real calendar date written as YYYY-MM-DD |
+| `fx_convert_currency` | `amount_out_of_range` | `ValidationError` | The converted amount exceeds the finite numeric range |
 | `fx_convert_currency` | `unsupported_currency` | `ValidationError` | `base_currency` or `quote_currency` is not available in current discovery or the served historical data |
-| `fx_convert_currency` | `date_out_of_range` | `ValidationError` | `date` is before 1999-01-04 or in the future |
+| `fx_convert_currency` | `date_out_of_range` | `ValidationError` | `date` precedes available market or statutory rates, or is in the future |
 | `fx_convert_currency` | `upstream_no_data` | `NotFound` | Both currencies are supported but Frankfurter v1 has no observation for a requested currency on this date |
 | `fx_get_rate` | `invalid_date_format` | `ValidationError` | `date` is not a real calendar date written as YYYY-MM-DD |
 | `fx_get_rate` | `unsupported_currency` | `ValidationError` | `base_currency` or `quote_currency` is not available in current discovery or the served historical data |
-| `fx_get_rate` | `date_out_of_range` | `ValidationError` | `date` is before 1999-01-04 or in the future |
+| `fx_get_rate` | `date_out_of_range` | `ValidationError` | `date` precedes available market or statutory rates, or is in the future |
 | `fx_get_rate` | `upstream_no_data` | `NotFound` | Both currencies are supported but Frankfurter v1 has no observation for a requested currency on this date |
 | `fx_get_rates` | `invalid_date_format` | `ValidationError` | `date` is not a real calendar date written as YYYY-MM-DD |
 | `fx_get_rates` | `unsupported_currency` | `ValidationError` | `base_currency` or an entry in `symbols` is not available in current discovery or the served historical data |
-| `fx_get_rates` | `date_out_of_range` | `ValidationError` | `date` is before 1999-01-04 or in the future |
+| `fx_get_rates` | `date_out_of_range` | `ValidationError` | `date` precedes available market or statutory rates, or is in the future |
 | `fx_get_rates` | `upstream_no_data` | `NotFound` | Every requested currency is supported but Frankfurter v1 has no observation for a requested currency on this date |
 | `fx_get_timeseries` | `invalid_date_format` | `ValidationError` | `start_date` or `end_date` is not a real calendar date written as YYYY-MM-DD |
 | `fx_get_timeseries` | `unsupported_currency` | `ValidationError` | `base_currency` or `quote_currency` is not available in current discovery or the served historical data |
-| `fx_get_timeseries` | `date_out_of_range` | `ValidationError` | `start_date` is before 1999-01-04 or `end_date` is in the future |
+| `fx_get_timeseries` | `date_out_of_range` | `ValidationError` | the requested interval precedes the applicable rate history or ends in the future |
 | `fx_get_timeseries` | `invalid_range` | `ValidationError` | `start_date` is after `end_date` |
 | `fx_get_timeseries` | `upstream_no_data` | `NotFound` | Both currencies are supported but Frankfurter v1 has no observation for a requested currency across this range |
 | `fx_get_timeseries` | `canvas_not_found` | `NotFound` | An explicitly supplied canvas_id does not exist or has expired |
@@ -49,7 +50,7 @@ Domain failures to declare as `errors: [{ reason, code, when }]` on each tool. B
 | `fx_dataframe_drop` | `canvas_not_found` | `NotFound` | `canvas_id` does not exist or has been evicted |
 | `fx_dataframe_drop` | `canvas_unavailable` | `ServiceUnavailable` | DataCanvas is not configured on this deployment |
 
-Every `unsupported_currency` rejection names the input `field` and sorted `accepted_codes` and `rejected_codes`, with optional `currency_windows` historical guidance for known metadata codes. Latest requests validate against current discovery; historical requests use the union of currencies in raw served EUR data before inclusive clipping. Retired currencies remain available on their observation dates. A currently supported currency absent from historical data is `upstream_no_data`, with `field` and sorted deduplicated `missing_codes` from the served snapshot, plus `currency_windows` and one sentence per code placing the requested date or range against its coverage bounds (begins, ends, or inside bounds that can contain gaps); an unknown code retains `unsupported_currency` precedence. The bounds come from the coverage metadata, fetched on a cold cache exactly as `unsupported_currency` does it (one 1-second request, no retries); without metadata the error is unchanged. The caller cannot guess a start date or tell an interior gap from a late start, and the metadata is already cached for the other rejection. An HTTP 404 without a snapshot carries no invented attribution. No historical currency already returned by an unfiltered snapshot is removed.
+Every `unsupported_currency` rejection names the input `field` and sorted `accepted_codes` and `rejected_codes`, with optional `currency_windows` historical guidance for known metadata codes. Market legs use current discovery for latest requests and the raw EUR observations for historical requests. Retired currencies remain available on their observation dates. A currently supported currency absent from historical data is `upstream_no_data`, with `field` and sorted deduplicated `missing_codes` from the served snapshot, plus `currency_windows` and one sentence per code placing the requested date or range against its coverage bounds (begins, ends, or inside bounds that can contain gaps); an unknown code retains `unsupported_currency` precedence. The bounds come from the coverage metadata, fetched on a cold cache exactly as `unsupported_currency` does it (one 1-second request, no retries); without metadata the error is unchanged. The caller cannot guess a start date or tell an interior gap from a late start, and the metadata is already cached for the other rejection. An HTTP 404 without a snapshot carries no invented attribution. No historical currency already returned by an unfiltered snapshot is removed.
 
 Schema-level argument rejections include empty `symbols`, non-positive `amount`, and non-positive, fractional or nonnumeric `row_limit`. Positive integral row limits above the configured canvas row cap (`CANVAS_DEFAULT_ROW_LIMIT`, 10,000 by default) are accepted and clamped with a notice naming requested/effective values; truncation notices compose with it and SQL paging uses the effective limit. Currency values are trimmed and uppercased. Date patterns are JSON Schema metadata, leaving malformed/blank/impossible calendar dates to typed `invalid_date_format` validation. Point dates allow literal `latest`; required range dates do not. Future-range recovery recommends end_date today or earlier, never omission.
 
@@ -70,9 +71,9 @@ Recovery hints: `unsupported_currency` → "Call `fx_list_currencies` to get val
 
 ## Overview
 
-Daily FX rates and currency conversion from Frankfurter v1 (`api.frankfurter.dev/v1`), keyless with history from 1999-01-04. Current discovery and historical availability are separate: historical snapshots include retired currencies absent from today's list.
+The default source combines Frankfurter v1 market observations with the 21 fixed rates in Council Regulation (EC) No 2866/98 as amended. For custom Frankfurter endpoints the supplied observations determine availability and provenance.
 
-Every rate response identifies `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`. The payload does not identify individual providers, so the server makes no ECB-only or provider-specific claim. Daily observations are not intraday quotes or tradeable bid/ask prices.
+Market-only responses identify `source: "Frankfurter v1"` and `rate_type: "Daily rate (Frankfurter v1)"`. Frankfurter payloads do not identify individual providers. For an explicit legacy euro currency, `fixed_rates` identifies each statutory factor used. A mixed result also identifies the market source and any difference between the statutory and market dates.
 
 Pair rates use local division of same-date EUR legs, avoiding rounded upstream cross-rates. Point tools flag upstream-snapped dates; ranges retain only observations inside the inclusive requested window.
 
@@ -102,7 +103,7 @@ Fills a fleet gap: `coingecko` is crypto, `finnhub` is equities. This is the fia
 |:--------|:------|:--------|
 | `FrankfurterService` | Frankfurter API (`https://api.frankfurter.dev/v1`) | Five rate/currency tools and both resources |
 
-Caller cancellation flows through currency validation, fetch, response-body consumption, and retry backoff. Each v1 read has a 12-second total deadline across two retries and 10-second attempt timeouts. Currency loads are independent in flight, and only completed, uncancelled loads populate the day-long cache. Optional official ECB metadata uses one 1-second request without retries; successful rate calls do not fetch it. Discovery and the `unsupported_currency` and `upstream_no_data` rejections are the only consumers, keeping chained reads within the MCP request budget.
+Caller cancellation reaches validation, fetch, body consumption and retry backoff. Each v1 read has a 12-second deadline across retries. Optional official ECB metadata uses one 1-second request without retries. Discovery, currency errors and partial-coverage notices can use it. A metadata outage leaves the underlying market result available.
 
 ---
 
@@ -147,14 +148,14 @@ Each step is independently testable.
 
 ## Workflow Analysis
 
-**`fx_convert_currency`** (one rate call, plus a currency-list fetch on a cold cache):
+**`fx_convert_currency`** (one market snapshot when needed, plus a currency-list read for cold latest validation)
 
 | # | Call | Purpose | Note |
 |:--|:-----|:--------|:-----|
 | 1 | `GET /v1/{date}?base=EUR` | Fetch all EUR legs and historical membership | `latest` if no date given |
 | — | *(no extra call)* | Divide quote leg by base leg locally; EUR = 1 | No intermediate rounding |
 
-**`fx_get_timeseries`** (one range call, a currency-list fetch on a cold cache, and optional canvas registration):
+**`fx_get_timeseries`** (a market range when needed, optional historical coverage lookup and optional canvas registration)
 
 | # | Call | Purpose | Note |
 |:--|:-----|:--------|:-----|
@@ -169,17 +170,17 @@ Output includes `base_currency`, `quote_currency`, clipped `start_date`/`end_dat
 
 ## Design Decisions
 
-**Local EUR-leg calculation.** Pair, conversion, bulk, resource and series surfaces divide quote leg by base leg from one unfiltered EUR response. This avoids Frankfurter v1's cross-rate rounding. EUR's leg is 1; other legs must coexist on each emitted date. Identity pairs use real availability and return 1.
+**Local EUR-leg calculation.** Divide the quote leg by the base leg without intermediate rounding. EUR is 1. A market leg comes from the unfiltered EUR observation. An explicit legacy leg uses its irrevocable factor on and after its adoption date. The point request date decides which factor applies even when the market fix snaps back.
 
-**One rate-data call per snapshot or range.** The unfiltered response supplies calculation and historical membership. Latest validation uses cached `/currencies`. Discovery tools/resources add `as_of` from a latest EUR snapshot read uncached on every call, the request a latest-rate call makes; callers receive copied currency records and cancelled loads never poison another caller's cache. A cached `as_of` lags a newly published fix by up to the cache lifetime (a day-long entry kept the previous date for up to 24 hours while latest-rate calls returned the new one), and even a 5-minute cache disagrees for up to 5 minutes. The currency list and coverage metadata keep their day-long caches.
+**One market-data request per snapshot or range.** The unfiltered response supplies market legs and historical membership. Latest market validation uses cached `/currencies`. Fully statutory requests need no rate fetch. Discovery reads `as_of` uncached from `/latest?base=EUR` on each call so it follows publication of the next fix. Currency membership and successful optional metadata reads are cached for a day.
 
 **Ranges clip after historical membership validation.** Raw served dates prove availability, including an upstream-snapped date before a weekend-only request. Only observations inside the inclusive requested window are emitted. Point tools expose the actual rate date and date_snapped.
 
-**`symbols` optional on `fx_get_rates`.** Omission returns every available quote currency except the base; an explicit filter returns only those currencies, including identity when requested. Historical filtered and unfiltered membership uses the same snapshot.
+**Bulk quote membership.** An unfiltered snapshot returns its served currencies except the base. An explicit symbol list can request statutory currencies or the base itself.
 
 **No amount param threading into `fx_get_rate`.** The idea spec draws a clean line: `fx_get_rate` is "what is the rate?", `fx_convert_currency` is "how much do I get?". Conflating them (as the Frankfurter `amount` param allows) would make `fx_get_rate` a fuzzy alias of `fx_convert_currency`. The tools stay focused.
 
-**Inline time-series pages continue from `start_date`, not an offset or cursor.** Rows are keyed by publication date and the tool already takes `start_date`, so returning the first unreturned date as `next_start_date` makes paging deterministic with no new input, and a continuation can never drift onto the wrong series the way a stale offset can. The 500-day page is ~21 KB serialized across both surfaces; `rate_count` stays the total for the range each call requested.
+**Inline time-series pages continue from `start_date`, not an offset or cursor.** Rows are keyed by date and the tool already takes `start_date`, so returning the first unreturned date as `next_start_date` makes paging deterministic with no new input, and a continuation can never drift onto the wrong series the way a stale offset can. The 500-day page is ~21 KB serialized across both surfaces; `rate_count` stays the total for the range each call requested.
 
 **`fx_dataframe_query` defaults `row_limit` to 150.** Every returned row renders on both surfaces — about 125 B/row serialized for the staged `date`/`rate` table — so 150 rows measure ~19 KB on the wire, inside the framework's 24 KB outline budget, where 200 rows measure ~25 KB. The maximum is the configured `CANVAS_DEFAULT_ROW_LIMIT` (10,000 by default), read per call: the canvas refuses any `rowLimit` above it, so a larger `row_limit` clamps to the cap with a notice instead of failing, and a deployment that lowers the cap below 150 clamps the default too.
 
@@ -195,28 +196,28 @@ Output includes `base_currency`, `quote_currency`, clipped `start_date`/`end_dat
 
 **DataCanvas on by default, except in the MCPB bundle.** `src/index.ts` sets `CANVAS_PROVIDER_TYPE` to `duckdb` when it is unset or empty, after the framework loads `.env`, so npm, Docker, and plugin installs get SQL over long series without configuration and `none` still opts out. The bundle strips DuckDB's native binding to stay portable, so `manifest.json` pins `none`: it starts cleanly and pages long ranges inline instead of failing on the first spill.
 
-**Direct API retrieval.** Frankfurter v1 supplies one unfiltered EUR response per snapshot or range. A separate mirror would add storage and synchronization without serving a required workflow.
+**Direct market-data retrieval.** A market snapshot or series reads one unfiltered EUR response. Statutory factors are small, fixed by law and resolved locally.
 
-**Truthful v1 provenance.** Every rate-bearing response carries `rate_type: "Daily rate (Frankfurter v1)"` and `source: "Frankfurter v1"`, without inventing provider attribution.
+**Rate provenance.** Preserve `Frankfurter v1` for market observations. For a statutory conversion identify the legal source, its effective leg and any market leg used alongside it. A statutory-only point uses the requested date. A statutory-only interval contributes calendar days, including on weekends. RON and TRY observations before their 2005 redenominations require a notice that identifies their units.
 
 **`fx_list_currencies` as a plain array, not a map.** Returning `[{ code, name }]` rather than `{ USD: "United States Dollar" }` makes it naturally sortable in `format()` and easier for agents to iterate or filter for display. The Frankfurter `/currencies` endpoint returns a flat object, so the service normalizes to an array.
 
 ---
 
-**Coverage and delivery are separate.** Count each clipped served date missing either EUR leg once, retaining the count and first/last dates in a notice. Never count unserved weekends, holidays or clipped snapped dates. Statistics describe observed days only; `truncated` describes omitted observations in delivery. Compose coverage, clamp, empty and delivery notices.
+**Coverage and delivery.** Count each clipped publication day missing one or both legs once. Track the affected currencies separately, since their first and last holes may differ. The optional metadata lookup can explain missing days using each code’s own outer bounds. It cannot establish that every intervening date is missing. Compose the coverage and unit notices with clamp, empty and delivery notices.
 
 **Caller-controlled previews.** `limit` is a nonnegative integer, default 500, visibly clamped at 500. Apply it after automatic spill eligibility and character-budget preview selection, never to source rows, summary or the complete staged table. `limit: 0` is summary-only; nonempty inline continuation points to the first observation and requires a positive limit to advance. Staged results continue through SQL.
 
-**Optional historical discovery.** `fx_list_currencies` accepts `include_retired`, default false; `fx://currencies` remains current-only with no parameters. Validated official metadata adds optional `start_date`/`end_date` outer bounds and `currency_windows` guidance on `unsupported_currency` and `upstream_no_data`. Current v1 membership determines retirement, because active codes also have dated endpoints, and each row `include_retired` appends carries `retired: true` so a caller need not diff two lists. A successful read is cached for a day and a failed one for five minutes, which bounds request frequency during an outage without letting one transient timeout hide retired flags and coverage windows until the next daily refresh; custom v1 bases never contact the official endpoint. Metadata failure leaves original v1 success/errors intact and discovery discloses unavailable enrichment.
+**Historical discovery.** `fx_list_currencies` with `include_retired=true` merges the statutory catalog with current v1 membership and optional ECB coverage. Each appended currency is marked `retired: true`. Adoption dates and legal factors remain available if the coverage lookup fails. The current-only resource uses market discovery.
 
-**Conversion retains floating-point precision.** `quote_amount` is the unrounded JavaScript-number product `amount * rate`, including identity and small positive conversions. No monetary minor-unit policy is imposed. Rate labels use quote currency per base currency.
+**Conversion precision.** Market conversions return the JavaScript-number product `amount * rate`. For statutory legs the original factors are applied through EUR, `(amount / baseLeg) * quoteLeg`, to avoid rounding a reciprocal or an intermediate amount. Identity preserves the amount.
 
 ## Known Limitations
 
-- **Frankfurter v1 rates only.** Current discovery and historical availability remain validated from v1. Optional ECB currency metadata comes from `https://api.frankfurter.dev/v2/currencies?scope=all&providers=ECB`; it does not change rate provenance or historical validation.
-- **Daily observations only.** No intraday or tick data; latest means the latest served publication date.
+- **Market data.** Frankfurter v1 supplies observed rates. Optional official ECB currency metadata supplies historical coverage bounds. Statutory euro factors come from the regulation and remain available when optional metadata is missing.
+- **Daily data.** Market quotes use the latest served publication date. A wholly statutory result uses the requested day, or today in UTC for `latest`.
 - **Historical start: 1999-01-04.** Dates before that return `{"message":"not found"}`.
-- **No provider attribution in v1 payloads.** Source remains literally Frankfurter v1; no provider-specific or tradeable-price claim is inferred.
+- **Market attribution.** Frankfurter v1 payloads do not identify individual providers.
 - **BGN was present in 2024 data but absent in 2026 data.** The currency set can change over time as currencies enter/exit ECB scope; `fx_list_currencies` reflects the current set.
 
 ---

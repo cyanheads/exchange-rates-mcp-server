@@ -527,6 +527,35 @@ describe('fx_dataframe_query refusals on a DuckDB canvas', () => {
 
   const deniedHint =
     'Remove the function the message names — only the staged tables are queryable.';
+  it('renders nested DuckDB cells as escaped JSON alongside unchanged scalars', async () => {
+    const result = await runToolContract(
+      fxDataframeQuery,
+      {
+        canvas_id: canvasId,
+        query:
+          "SELECT {'s': ['a|b','c']} AS st, [1,2] AS ls, map(['a'],[1]) AS m, [] AS empty, 0 AS n, NULL AS nil",
+      },
+      { context: { tenantId } },
+    );
+    expect(result.structuredContent).toMatchObject({
+      rows: [
+        {
+          st: { s: ['a|b', 'c'] },
+          ls: [1, 2],
+          m: [{ key: 'a', value: 1 }],
+          empty: [],
+          n: 0,
+          nil: null,
+        },
+      ],
+    });
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining(
+        String.raw`| {"s":\["a\|b","c"\]} | \[1,2\] | \[{"key":"a","value":1}\] | \[\] | 0 |  |`,
+      ),
+    });
+  });
+
   it.each([
     {
       name: 'a quoted pragma_version in an unreferenced CTE',
@@ -570,7 +599,7 @@ describe('fx_dataframe_query refusals on a DuckDB canvas', () => {
       name: 'a syntax error',
       query: 'SELECT * FROM fx_usd_eur WHERE',
       message:
-        'Canvas query failed to prepare: Failed to extract statements: Parser Error: syntax error at end of input',
+        'Canvas query failed to prepare: Failed to extract statements: Parser Error: syntax error at or near "WHERE"',
       hint: 'Fix the SQL syntax the message names and send a single read-only SELECT. Put AS before an alias that is a SQL keyword, or double-quote it.',
     },
     {
@@ -606,6 +635,40 @@ describe('fx_dataframe_query refusals on a DuckDB canvas', () => {
     const text = result.content.map((block) => (block as { text: string }).text).join('\n');
     expect(text).toContain(hint);
     expect(text).not.toContain('verify table and column names');
+  });
+
+  it.each(['//', '%'])('rejects integer %s by zero and accepts TRY around it', async (operator) => {
+    const expression = `1::INTEGER ${operator} 0::INTEGER`;
+    const rejected = await runToolContract(
+      fxDataframeQuery,
+      { canvas_id: canvasId, query: `SELECT ${expression} AS value` },
+      { context: { tenantId } },
+    );
+    expect(rejected.isError).toBe(true);
+    expect(rejected.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        message: expect.stringContaining('Division by zero in expression'),
+        data: {
+          reason: 'invalid_query',
+          recovery: { hint: expect.stringContaining(DECLARED) },
+        },
+      },
+    });
+    expect((rejected.content[0] as { text: string }).text).toContain('Use TRY(...) to return NULL');
+
+    const recovered = await runToolContract(
+      fxDataframeQuery,
+      { canvas_id: canvasId, query: `SELECT TRY(${expression}) AS value` },
+      { context: { tenantId } },
+    );
+    expect(recovered.isError).toBeFalsy();
+    expect(recovered.structuredContent).toMatchObject({
+      rows: [{ value: null }],
+      row_count: 1,
+      truncated: false,
+    });
+    expect(tableDataLines((recovered.content[0] as { text: string }).text)).toEqual(['|  |']);
   });
 
   /**
@@ -702,10 +765,12 @@ describe('fx_dataframe_query under a lowered canvas row cap', () => {
     expect(structured).toMatchObject({ row_count: ROW_CAP, truncated: true });
     expect(structured.rows).toHaveLength(ROW_CAP);
     expect(tableDataLines(text)).toHaveLength(ROW_CAP);
+    expect(text).toContain('showing the first 100 rows');
     for (const surface of [structured.notice ?? '', text]) {
       expect(surface).toContain("row_limit 500 was clamped to this server's row cap of 100.");
       expect(surface).not.toContain('Requested');
       expect(surface).toContain('LIMIT 100 OFFSET 100');
+      expect(surface).toContain('FROM (<original SELECT>) AS page');
     }
   });
 
